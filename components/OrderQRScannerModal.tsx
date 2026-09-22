@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import jsQR from 'jsqr';
 import { 
+  MultiFormatReader, 
+  RGBLuminanceSource, 
+  BinaryBitmap, 
+  HybridBinarizer 
+} from '@zxing/library';
+import { 
   Camera, 
   X, 
   CheckCircle2, 
@@ -20,7 +26,10 @@ import {
   RotateCw,
   Search,
   Check,
-  MessageSquare
+  MessageSquare,
+  ZoomIn,
+  ZoomOut,
+  Sparkles
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { supabase } from '../supabase';
@@ -54,6 +63,14 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   const isProcessingRef = useRef<boolean>(false);
   const isScanningRef = useRef<boolean>(true);
   const lastScannedRef = useRef<{ code: string; timestamp: number } | null>(null);
+  const zxingReaderRef = useRef<MultiFormatReader | null>(null);
+  const barcodeDetectorRef = useRef<any>(null);
+  const isFrameDecodingRef = useRef<boolean>(false);
+  const lastScanTimeRef = useRef<number>(0);
+
+  // Touch pinch-to-zoom tracking
+  const touchDistanceRef = useRef<number | null>(null);
+  const touchZoomStartRef = useRef<number>(1);
 
   const [hasCamera, setHasCamera] = useState<boolean>(true);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -62,6 +79,27 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [manualInput, setManualInput] = useState<string>('');
+
+  // Zoom & Torch States
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [zoomCapabilities, setZoomCapabilities] = useState<{ min: number; max: number; step: number; supported: boolean }>({
+    min: 1,
+    max: 3,
+    step: 0.1,
+    supported: false
+  });
+  const [torchSupported, setTorchSupported] = useState<boolean>(false);
+  const [torchOn, setTorchOn] = useState<boolean>(false);
+  const [scanSuccessPulse, setScanSuccessPulse] = useState<boolean>(false);
+
+  // Initialize ZXing MultiFormatReader
+  if (!zxingReaderRef.current) {
+    try {
+      zxingReaderRef.current = new MultiFormatReader();
+    } catch (e) {
+      console.warn("Failed to initialize ZXing MultiFormatReader:", e);
+    }
+  }
 
   // Result state
   const [processedOrder, setProcessedOrder] = useState<Order | null>(null);
@@ -112,11 +150,12 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     }
   }, []);
 
-  // Start camera stream
+  // Start camera stream with autofocus and zoom capabilities detection
   const startCamera = useCallback(async (mode: 'environment' | 'user' = facingMode) => {
     stopCamera();
     setCameraError(null);
     setIsScanning(true);
+    setScanSuccessPulse(false);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -129,19 +168,80 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
           video: {
             facingMode: { ideal: mode },
             width: { ideal: 1280 },
-            height: { ideal: 720 }
+            height: { ideal: 720 },
+            // Continuous autofocus on supported devices
+            advanced: [{ focusMode: 'continuous' } as any]
           },
           audio: false
         });
       } catch (err1) {
-        // Fallback to basic video without specific facingMode constraints
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false
-        });
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: mode },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: false
+          });
+        } catch (err2) {
+          // Fallback to basic video without specific facingMode constraints
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+        }
       }
 
       streamRef.current = stream;
+
+      // Inspect camera capabilities (autofocus, hardware zoom, torch)
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        try {
+          const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+          
+          // 1. Continuous autofocus
+          if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+            try {
+              await track.applyConstraints({
+                advanced: [{ focusMode: 'continuous' } as any]
+              });
+            } catch (focusErr) {}
+          }
+
+          // 2. Hardware zoom detection
+          if (caps.zoom) {
+            const minZ = caps.zoom.min || 1;
+            const maxZ = Math.min(caps.zoom.max || 5, 4);
+            const stepZ = caps.zoom.step || 0.1;
+            setZoomCapabilities({
+              min: minZ,
+              max: maxZ,
+              step: stepZ,
+              supported: true
+            });
+          } else {
+            // Software/digital zoom fallback (1x to 3x)
+            setZoomCapabilities({
+              min: 1,
+              max: 3,
+              step: 0.1,
+              supported: false
+            });
+          }
+
+          // 3. Torch detection
+          if (caps.torch) {
+            setTorchSupported(true);
+          } else {
+            setTorchSupported(false);
+          }
+        } catch (capsErr) {
+          console.warn("Could not inspect camera track capabilities:", capsErr);
+        }
+      }
+
       if (videoRef.current) {
         const vid = videoRef.current;
         vid.srcObject = stream;
@@ -173,6 +273,78 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     }
   }, [facingMode, stopCamera]);
 
+  // Apply zoom level (hardware if supported, otherwise digital scale)
+  const applyZoom = useCallback(async (level: number) => {
+    const minZ = zoomCapabilities.min || 1;
+    const maxZ = zoomCapabilities.max || 3;
+    const clamped = Math.max(minZ, Math.min(maxZ, Math.round(level * 10) / 10));
+    setZoomLevel(clamped);
+
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (track && zoomCapabilities.supported) {
+      try {
+        await track.applyConstraints({
+          advanced: [{ zoom: clamped }] as any
+        });
+      } catch (e) {
+        console.warn("Hardware zoom application failed, using digital zoom fallback:", e);
+      }
+    }
+  }, [zoomCapabilities]);
+
+  // Toggle camera flashlight (torch)
+  const toggleTorch = useCallback(async () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track || !torchSupported) return;
+    try {
+      const nextTorch = !torchOn;
+      await track.applyConstraints({
+        advanced: [{ torch: nextTorch }] as any
+      });
+      setTorchOn(nextTorch);
+    } catch (e) {
+      console.warn("Torch toggle failed:", e);
+    }
+  }, [torchOn, torchSupported]);
+
+  // Touch gesture pinch-to-zoom handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchDistanceRef.current = Math.hypot(dx, dy);
+      touchZoomStartRef.current = zoomLevel;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchDistanceRef.current) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const currentDistance = Math.hypot(dx, dy);
+      const factor = currentDistance / touchDistanceRef.current;
+      applyZoom(touchZoomStartRef.current * factor);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchDistanceRef.current = null;
+  };
+
+  // Tap camera view to trigger autofocus
+  const handleTapToFocus = async () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+      if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'continuous' } as any]
+        });
+      }
+    } catch (err) {}
+  };
+
   // Extract order from scanned QR text
   const matchOrder = useCallback(async (scannedText: string): Promise<Order | null> => {
     const raw = normalizeArabicDigits(scannedText || '').trim();
@@ -180,6 +352,36 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
     // Cleaned version without leading hash or spaces
     const cleanRaw = raw.replace(/^#+/, '').trim();
+
+    // 0. URL matching (if QR contains a full order URL)
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      try {
+        const url = new URL(raw);
+        const orderParam = url.searchParams.get('order') || 
+                           url.searchParams.get('order_number') || 
+                           url.searchParams.get('id') || 
+                           url.searchParams.get('invoice');
+        if (orderParam) {
+          const cleanParam = normalizeArabicDigits(orderParam).replace(/^#+/, '').trim();
+          const match = orders.find(o => 
+            o.order_number === cleanParam || 
+            o.id === cleanParam || 
+            (o.order_number && o.order_number.toLowerCase() === cleanParam.toLowerCase())
+          );
+          if (match) return match;
+        }
+        const segments = url.pathname.split('/').filter(Boolean);
+        if (segments.length > 0) {
+          const lastSegment = normalizeArabicDigits(segments[segments.length - 1]).replace(/^#+/, '').trim();
+          const match = orders.find(o => 
+            o.order_number === lastSegment || 
+            o.id === lastSegment ||
+            (o.order_number && o.order_number.toLowerCase() === lastSegment.toLowerCase())
+          );
+          if (match) return match;
+        }
+      } catch (urlErr) {}
+    }
 
     // 1. Direct match with order_number or id (case-insensitive)
     let target = orders.find(o => 
@@ -372,59 +574,136 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   const handleCodeFoundRef = useRef(handleCodeFound);
   handleCodeFoundRef.current = handleCodeFound;
 
-  // Video scanning frame loop
+  // Multi-tier Video scanning frame loop (BarcodeDetector + jsQR + ZXing MultiFormat)
   useEffect(() => {
     if (!isOpen || !isScanning || processedOrder) return;
 
     let isSubscribed = true;
 
-    const scanFrame = () => {
+    const scanFrame = async () => {
       if (!isSubscribed || !isScanningRef.current || isProcessingRef.current) return;
+
+      const now = performance.now();
+      // Throttle scanning to every 40ms (~25 fps) to avoid main-thread saturation and frame jitter
+      if (now - lastScanTimeRef.current < 40) {
+        if (isSubscribed && isScanningRef.current && !isProcessingRef.current) {
+          animFrameRef.current = requestAnimationFrame(scanFrame);
+        }
+        return;
+      }
+      lastScanTimeRef.current = now;
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
 
-      if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Check if video is loaded and rendering frames (readyState >= 2 indicates current data available)
+      if (video && canvas && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0 && !isFrameDecodingRef.current) {
+        isFrameDecodingRef.current = true;
 
-          try {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            let code = jsQR(imageData.data, imageData.width, imageData.height, {
-              inversionAttempts: 'attemptBoth'
-            });
+        try {
+          let detectedCode: string | null = null;
 
-            // If full frame did not catch it (e.g. wide aspect ratio or small QR on paper), try center crop
-            if (!code || !code.data) {
-              const cropSize = Math.floor(Math.min(canvas.width, canvas.height) * 0.75);
-              const startX = Math.floor((canvas.width - cropSize) / 2);
-              const startY = Math.floor((canvas.height - cropSize) / 2);
-              if (cropSize > 50) {
-                const croppedData = ctx.getImageData(startX, startY, cropSize, cropSize);
-                code = jsQR(croppedData.data, croppedData.width, croppedData.height, {
-                  inversionAttempts: 'attemptBoth'
+          // 1. Tier 1: Hardware-Accelerated Native BarcodeDetector (Supported on Android Chrome & modern browsers)
+          if (typeof (window as any).BarcodeDetector !== 'undefined') {
+            try {
+              if (!barcodeDetectorRef.current) {
+                barcodeDetectorRef.current = new (window as any).BarcodeDetector({
+                  formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a', 'data_matrix']
                 });
               }
+              const detectedList = await barcodeDetectorRef.current.detect(video);
+              if (detectedList && detectedList.length > 0 && detectedList[0].rawValue) {
+                detectedCode = detectedList[0].rawValue.trim();
+              }
+            } catch (detectorErr) {
+              // Graceful fallback to canvas decoding
             }
+          }
 
-            if (code && code.data && code.data.trim()) {
-              if (!isProcessingRef.current) {
-                isProcessingRef.current = true;
-                isScanningRef.current = false;
-                if (animFrameRef.current) {
-                  cancelAnimationFrame(animFrameRef.current);
-                  animFrameRef.current = null;
+          // 2. Tier 2: Canvas-based scanning (jsQR + ZXing MultiFormatReader)
+          if (!detectedCode) {
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (ctx) {
+              // Rescale to a reliable scanning dimension (around 640px width) for ultra-fast processing
+              const targetWidth = Math.min(640, video.videoWidth);
+              const targetHeight = Math.round((targetWidth / video.videoWidth) * video.videoHeight);
+              canvas.width = targetWidth;
+              canvas.height = targetHeight;
+
+              // If digital zoom is applied without hardware zoom, crop into center so codes are large
+              if (!zoomCapabilities.supported && zoomLevel > 1) {
+                const cropW = video.videoWidth / zoomLevel;
+                const cropH = video.videoHeight / zoomLevel;
+                const cropX = (video.videoWidth - cropW) / 2;
+                const cropY = (video.videoHeight - cropH) / 2;
+                ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetWidth, targetHeight);
+              } else {
+                ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+              }
+
+              // A. jsQR on full frame
+              const fullImageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+              const fullQr = jsQR(fullImageData.data, targetWidth, targetHeight, {
+                inversionAttempts: 'attemptBoth'
+              });
+              if (fullQr && fullQr.data && fullQr.data.trim()) {
+                detectedCode = fullQr.data.trim();
+              }
+
+              // B. jsQR on Center Reticle Crop (where user centers the paper/tag)
+              if (!detectedCode) {
+                const centerSize = Math.floor(Math.min(targetWidth, targetHeight) * 0.7);
+                const startX = Math.floor((targetWidth - centerSize) / 2);
+                const startY = Math.floor((targetHeight - centerSize) / 2);
+                if (centerSize > 50) {
+                  const centerImageData = ctx.getImageData(startX, startY, centerSize, centerSize);
+                  const centerQr = jsQR(centerImageData.data, centerSize, centerSize, {
+                    inversionAttempts: 'attemptBoth'
+                  });
+                  if (centerQr && centerQr.data && centerQr.data.trim()) {
+                    detectedCode = centerQr.data.trim();
+                  }
                 }
-                handleCodeFoundRef.current(code.data);
-                return;
+              }
+
+              // C. ZXing MultiFormatReader for 1D Barcodes (CODE128 from tags, Code39, EAN)
+              if (!detectedCode && zxingReaderRef.current) {
+                try {
+                  const luminanceSource = new RGBLuminanceSource(
+                    new Uint8ClampedArray(fullImageData.data),
+                    targetWidth,
+                    targetHeight
+                  );
+                  const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+                  const zxResult = zxingReaderRef.current.decode(binaryBitmap);
+                  if (zxResult && zxResult.getText()) {
+                    detectedCode = zxResult.getText().trim();
+                  }
+                } catch (zxErr) {
+                  // Barcode not found in this frame
+                }
               }
             }
-          } catch (scanErr) {
-            // Ignored - frame decode transient error
           }
+
+          // If a code was found, trigger success feedback and pass to handler
+          if (detectedCode && detectedCode.trim()) {
+            if (!isProcessingRef.current) {
+              setScanSuccessPulse(true);
+              isProcessingRef.current = true;
+              isScanningRef.current = false;
+              if (animFrameRef.current) {
+                cancelAnimationFrame(animFrameRef.current);
+                animFrameRef.current = null;
+              }
+              handleCodeFoundRef.current(detectedCode);
+              return;
+            }
+          }
+        } catch (scanErr) {
+          // Ignored - frame decode transient error
+        } finally {
+          isFrameDecodingRef.current = false;
         }
       }
 
@@ -442,7 +721,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
         animFrameRef.current = null;
       }
     };
-  }, [isOpen, isScanning, !!processedOrder]);
+  }, [isOpen, isScanning, !!processedOrder, zoomLevel, zoomCapabilities.supported]);
 
   // Handle open/close lifecycle
   useEffect(() => {
@@ -510,6 +789,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     setNotificationStatus(null);
     setCameraError(null);
     setManualInput('');
+    setScanSuccessPulse(false);
     setIsScanning(true);
     setIsProcessing(false);
     startCamera();
@@ -668,12 +948,18 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                 </span>
               </div>
 
-              {/* Camera Preview Container */}
-              <div className="relative rounded-3xl overflow-hidden bg-slate-950 aspect-square flex items-center justify-center border-4 border-slate-900 shadow-inner">
+              {/* Camera Preview Container with Pinch-to-Zoom and Tap-to-Focus */}
+              <div 
+                className="relative rounded-3xl overflow-hidden bg-slate-950 aspect-square flex items-center justify-center border-4 border-slate-900 shadow-inner select-none touch-none"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onClick={handleTapToFocus}
+              >
                 {/* Hidden canvas for decoding */}
                 <canvas ref={canvasRef} className="hidden" />
 
-                {/* Video feed */}
+                {/* Video feed with hardware/digital zoom scaling */}
                 <video
                   ref={videoRef}
                   className="w-full h-full object-cover"
@@ -681,54 +967,140 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                   playsInline
                   muted
                   disablePictureInPicture
+                  style={{
+                    transform: `scale(${zoomLevel})`,
+                    transformOrigin: 'center center',
+                    transition: 'transform 0.12s ease-out'
+                  }}
                 />
 
                 {/* Optical Scanning Overlay */}
                 <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-                  {/* Scanner Target Box with Corner Guides */}
-                  <div className="w-64 h-64 border-2 border-indigo-400/60 rounded-3xl relative overflow-hidden shadow-2xl backdrop-brightness-110">
+                  {/* Scanner Target Box with Corner Guides & Success Pulse */}
+                  <div className={`w-64 h-64 border-2 rounded-3xl relative overflow-hidden shadow-2xl backdrop-brightness-110 transition-all duration-300 ${
+                    scanSuccessPulse 
+                      ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_30px_#10b981]' 
+                      : 'border-indigo-400/60'
+                  }`}>
                     {/* Corner Reticles */}
-                    <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-400 rounded-tr-xl" />
-                    <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-400 rounded-tl-xl" />
-                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-400 rounded-br-xl" />
-                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-400 rounded-bl-xl" />
+                    <div className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
 
                     {/* Animated Scanning Laser Line */}
-                    {isScanning && !isProcessing && (
+                    {isScanning && !isProcessing && !scanSuccessPulse && (
                       <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-400 to-transparent shadow-[0_0_12px_#818cf8] animate-pulse"
                         style={{
                           animation: 'scanLaser 2.2s infinite ease-in-out'
                         }}
                       />
                     )}
+
+                    {/* Center Success Icon Pulse */}
+                    {scanSuccessPulse && (
+                      <div className="absolute inset-0 flex items-center justify-center animate-in zoom-in-50 duration-200">
+                        <div className="p-4 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-500/40 animate-bounce">
+                          <Check size={36} className="stroke-[3]" />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Guide text */}
-                  <span className="mt-4 px-3.5 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md text-white text-xs font-black shadow-md border border-white/10">
-                    {isProcessing ? 'جاري معالجة الرمز والطلب...' : 'وجه الكاميرا نحو رمز QR على الفاتورة'}
-                  </span>
+                  {/* Guide text & Active Zoom Indicator */}
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="px-3.5 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md text-white text-xs font-black shadow-md border border-white/10">
+                      {isProcessing ? 'جاري معالجة الرمز والطلب...' : 'وجه الكاميرا نحو رمز QR أو الباركود'}
+                    </span>
+                    {zoomLevel > 1 && (
+                      <span className="px-2 py-1 rounded-full bg-indigo-600/90 text-white text-[11px] font-black shadow-md font-mono">
+                        {zoomLevel.toFixed(1)}x
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Camera Top Controls */}
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-auto">
-                  <button
-                    type="button"
-                    onClick={() => setSoundEnabled(!soundEnabled)}
-                    className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer"
-                    title={soundEnabled ? 'كتم الصوت' : 'تفعيل صوت المسح'}
-                  >
-                    {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSoundEnabled(!soundEnabled)}
+                      className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                      title={soundEnabled ? 'كتم الصوت' : 'تفعيل صوت المسح'}
+                    >
+                      {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                    </button>
+
+                    {/* Flashlight / Torch toggle button */}
+                    {torchSupported && (
+                      <button
+                        type="button"
+                        onClick={toggleTorch}
+                        className={`p-2.5 rounded-xl backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md ${
+                          torchOn 
+                            ? 'bg-amber-500 text-white shadow-amber-500/30 font-black' 
+                            : 'bg-slate-900/70 hover:bg-slate-900 text-white'
+                        }`}
+                        title={torchOn ? 'إطفاء الفلاش' : 'تشغيل الفلاش'}
+                      >
+                        <Flashlight size={16} className={torchOn ? 'fill-current' : ''} />
+                      </button>
+                    )}
+                  </div>
 
                   <button
                     type="button"
                     onClick={toggleFacingMode}
-                    className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer"
+                    className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                     title="تبديل الكاميرا (أمامية / خلفية)"
                   >
                     <RotateCw size={16} />
                     <span className="text-[11px] font-bold">تبديل الكاميرا</span>
                   </button>
+                </div>
+
+                {/* Camera Bottom Zoom Controls */}
+                <div className="absolute bottom-3 inset-x-3 flex items-center justify-center gap-1.5 pointer-events-auto">
+                  <div className="flex items-center gap-1 bg-slate-900/80 backdrop-blur-md px-2 py-1.5 rounded-2xl border border-white/10 shadow-xl">
+                    {/* Zoom Out Button */}
+                    <button
+                      type="button"
+                      onClick={() => applyZoom(zoomLevel - 0.5)}
+                      disabled={zoomLevel <= zoomCapabilities.min}
+                      className="p-1.5 rounded-xl text-white hover:bg-white/20 disabled:opacity-40 transition-all cursor-pointer"
+                      title="تصغير الكاميرا"
+                    >
+                      <ZoomOut size={15} />
+                    </button>
+
+                    {/* Quick Preset Zoom Chips */}
+                    {[1, 1.5, 2, 3].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => applyZoom(preset)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-black font-mono transition-all cursor-pointer ${
+                          Math.abs(zoomLevel - preset) < 0.1
+                            ? 'bg-indigo-600 text-white shadow-sm scale-105'
+                            : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {preset}x
+                      </button>
+                    ))}
+
+                    {/* Zoom In Button */}
+                    <button
+                      type="button"
+                      onClick={() => applyZoom(zoomLevel + 0.5)}
+                      disabled={zoomLevel >= zoomCapabilities.max}
+                      className="p-1.5 rounded-xl text-white hover:bg-white/20 disabled:opacity-40 transition-all cursor-pointer"
+                      title="تكبير الكاميرا"
+                    >
+                      <ZoomIn size={15} />
+                    </button>
+                  </div>
                 </div>
               </div>
 
