@@ -54,6 +54,7 @@ import {
   FileSpreadsheet,
   FileText,
   Crown,
+  Building,
   Building2,
   Sparkles,
   Smile,
@@ -430,6 +431,22 @@ const App: React.FC = () => {
   const [onboardingPlan, setOnboardingPlan] = useState<'silver' | 'gold' | 'platinum'>('gold');
   const [showSaaSPaymentModal, setShowSaaSPaymentModal] = useState<boolean>(false);
   const [upgradePlanForm, setUpgradePlanForm] = useState<'silver' | 'gold' | 'platinum'>('gold');
+
+  // Store name editing in Settings
+  const [storeNameSettingsInput, setStoreNameSettingsInput] = useState<string>(() => {
+    try {
+      const cached = localStorage.getItem('laundry_cached_profile');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.laundry_name) return parsed.laundry_name;
+      }
+      return localStorage.getItem('laundry_name') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [isSavingStoreName, setIsSavingStoreName] = useState<boolean>(false);
+  const [storeNameSuccessMsg, setStoreNameSuccessMsg] = useState<string | null>(null);
 
   const [laundries, setLaundries] = useState<any[]>([]);
   const [newStaffForm, setNewStaffForm] = useState<{
@@ -2537,6 +2554,97 @@ const App: React.FC = () => {
       alert(`فشل حفظ الإعدادات: ${e.message}`);
     } finally {
       setSaveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (userProfile?.laundry_name) {
+      setStoreNameSettingsInput(prev => prev || userProfile.laundry_name);
+    }
+  }, [userProfile?.laundry_name]);
+
+  const handleSaveStoreName = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmedName = storeNameSettingsInput.trim();
+    if (!trimmedName) {
+      alert('يرجى كتابة اسم المغسلة التجارية أولاً');
+      return;
+    }
+    if (!userProfile) {
+      alert('تعذر تحديد الحساب الحالي');
+      return;
+    }
+
+    setIsSavingStoreName(true);
+    setStoreNameSuccessMsg(null);
+
+    try {
+      const currentLaundryId = userProfile.laundry_id; // CRITICAL: NEVER CHANGE ID!
+      const currentUserId = userProfile.id;
+
+      // 1. Update React state immediately
+      const updatedProfile: UserProfile = {
+        ...userProfile,
+        laundry_name: trimmedName
+      };
+      setUserProfile(updatedProfile);
+
+      // 2. Update localStorage cache
+      try {
+        localStorage.setItem('laundry_cached_profile', JSON.stringify(updatedProfile));
+        localStorage.setItem('laundry_name', trimmedName);
+      } catch (err) {}
+
+      // 3. Update profiles table in Supabase (both current profile and all staff in the same laundry)
+      try {
+        if (currentUserId) {
+          await supabase
+            .from('profiles')
+            .update({ laundry_name: trimmedName })
+            .eq('id', currentUserId);
+        }
+        if (currentLaundryId) {
+          await supabase
+            .from('profiles')
+            .update({ laundry_name: trimmedName })
+            .eq('laundry_id', currentLaundryId);
+        }
+      } catch (dbErr) {
+        console.warn("Updating profiles table:", dbErr);
+      }
+
+      // 4. Update laundries table (ONLY update name column, keep ID strictly untouched!)
+      try {
+        if (currentLaundryId) {
+          await supabase
+            .from('laundries')
+            .update({ name: trimmedName })
+            .eq('id', currentLaundryId);
+        }
+      } catch (laundriesErr) {
+        console.warn("Updating laundries table:", laundriesErr);
+      }
+
+      // 5. Update Supabase Auth user metadata
+      try {
+        await supabase.auth.updateUser({
+          data: { laundry_name: trimmedName }
+        });
+      } catch (authErr) {
+        console.warn("Updating auth metadata:", authErr);
+      }
+
+      // 6. Update laundries state list in App if present
+      setLaundries(prev => prev.map(l => l.id === currentLaundryId ? { ...l, name: trimmedName } : l));
+
+      setStoreNameSuccessMsg(`تم تحديث اسم المغسلة إلى "${trimmedName}" بنجاح ✅ (مع بقاء معرف المغسلة وكافة الطلبات السابقة ثابتة تماماً دون أي تغيير)`);
+      setTimeout(() => {
+        setStoreNameSuccessMsg(null);
+      }, 6000);
+    } catch (err: any) {
+      alert(`حدث خطأ أثناء حفظ اسم المغسلة: ${err?.message || err}`);
+    } finally {
+      setIsSavingStoreName(false);
     }
   };
 
@@ -10048,6 +10156,90 @@ const App: React.FC = () => {
 
         {activeTab === 'settings' && (
           <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+            {/* Store Profile & Name Card */}
+            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
+              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600"></div>
+
+              <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
+                    <Building size={28} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-2xl font-black text-slate-900">هوية واسم المغسلة التجارية</h3>
+                      <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-black rounded-full border border-indigo-100 flex items-center gap-1">
+                        <Sparkles size={12} /> تظهر في الفواتير والواتساب
+                      </span>
+                    </div>
+                    <p className="text-slate-400 font-bold text-xs mt-1">
+                      يمكنك تغيير الاسم التجاري لمغسلتك في أي وقت، مع الحفاظ التام على معرف المغسلة (Store ID) دون التأثير على أي طلبات سابقة
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 bg-slate-50 px-4 py-2.5 rounded-2xl border border-slate-200/80">
+                  <Lock size={16} className="text-indigo-600 shrink-0" />
+                  <div className="text-right">
+                    <span className="text-[10px] font-black text-slate-400 block">معرف المغسلة الثابت (Store ID)</span>
+                    <span className="text-xs font-mono font-black text-slate-700 dir-ltr inline-block">
+                      {userProfile?.laundry_id || 'غير محدد'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Success Notification Banner */}
+              {storeNameSuccessMsg && (
+                <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 text-xs font-bold flex items-center gap-3 animate-in fade-in duration-300">
+                  <Check size={18} className="text-emerald-600 shrink-0" />
+                  <span>{storeNameSuccessMsg}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveStoreName} className="space-y-5">
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-2">
+                    الاسم التجاري للمغسلة <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Building className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input
+                      placeholder="اسم مغسلتك التجارية"
+                      className="w-full pr-12 pl-4 py-4 bg-slate-50 border rounded-2xl outline-none font-bold focus:ring-4 focus:ring-indigo-500/10 transition-all text-sm"
+                      required
+                      type="text"
+                      value={storeNameSettingsInput}
+                      onChange={(e) => setStoreNameSettingsInput(e.target.value)}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-bold mt-2">
+                    هذا الاسم هو ما يظهر في ترويسة الفواتير المطبوعة (A4 والفواتير الحرارية) ونصوص رسائل الواتساب الصامتة المرسلة للعملاء.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSavingStoreName || !storeNameSettingsInput.trim()}
+                    className="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-50 text-white rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    {isSavingStoreName ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>جاري حفظ الاسم...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save size={16} />
+                        <span>حفظ اسم المغسلة الجديد</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
             {/* Background WhatsApp Card */}
             <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
               <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600"></div>

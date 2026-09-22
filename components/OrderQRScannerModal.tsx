@@ -637,11 +637,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
         setLastDecodedDebug(failItem);
         setDebugLogs(prev => [failItem, ...prev.filter(l => l.id !== debugId).slice(0, 14)]);
 
-        const engineLabel = engine === 'BarcodeDetector' ? 'محرك العتاد السريع (BarcodeDetector)' :
-                            engine === 'jsQR' ? 'محرك فحص QR (jsQR)' :
-                            engine === 'ZXing' ? 'محرك الباركود الحراري (ZXing)' : 'إدخال يدوي';
-
-        setCameraError(`تمت قراءة الرمز بنجاح [${engineLabel}]:\n"${raw.length > 70 ? raw.slice(0, 70) + '...' : raw}"\n\n⚠️ لم يتم العثور على فاتورة مطابقة لهذا الرمز.`);
+        setCameraError(`⚠️ لم يتم العثور على فاتورة مطابقة لهذا الرمز (${raw.length > 30 ? raw.slice(0, 30) + '...' : raw}).\nيرجى التأكد من توجيه الكاميرا إلى رمز QR أو باركود الطلب الصحيح.`);
         setIsProcessing(false);
         isProcessingRef.current = false;
         
@@ -998,210 +994,14 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowDebugger(prev => !prev)}
-              className={`px-3 py-2 rounded-2xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                showDebugger
-                  ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-400/30 scale-105'
-                  : 'bg-white/10 hover:bg-white/20 text-white'
-              }`}
-              title="فحص ومصحح الأخطاء المباشر"
-            >
-              <Bug size={16} className={showDebugger ? 'text-slate-950 animate-bounce' : 'text-amber-300'} />
-              <span className="hidden sm:inline">مصحح الأخطاء</span>
-              {debugLogs.length > 0 && (
-                <span className={`w-4 h-4 rounded-full text-[10px] font-black flex items-center justify-center ${
-                  showDebugger ? 'bg-slate-950 text-amber-400' : 'bg-amber-400 text-slate-950'
-                }`}>
-                  {debugLogs.length}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={onClose}
-              className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
-              aria-label="إغلاق"
-            >
-              <X size={20} />
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
+            aria-label="إغلاق"
+          >
+            <X size={20} />
+          </button>
         </div>
-
-        {/* Live Scanner Debugger Panel */}
-        {showDebugger && (
-          <div className="p-4 bg-slate-900 border-b border-slate-800 text-white space-y-4 animate-in slide-in-from-top-3 duration-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-black text-amber-400">
-                <Terminal size={16} />
-                <span>مصحح قراءة الرموز والفواتير المباشر (Scanner Diagnostics)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                {debugLogs.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => { setDebugLogs([]); setLastDecodedDebug(null); }}
-                    className="text-[10px] font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded-lg transition-all cursor-pointer"
-                  >
-                    مسح السجل
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowDebugger(false)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* Live Engine Status Matrix */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-bold">
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
-                <span className="text-slate-400 block text-[10px]">المحرك المادي</span>
-                <span className="text-emerald-400 font-mono text-[10px]">
-                  {typeof (window as any).BarcodeDetector !== 'undefined' ? 'BarcodeDetector ✅' : 'غير متوفر ❌'}
-                </span>
-              </div>
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
-                <span className="text-slate-400 block text-[10px]">محركات البرمجيات</span>
-                <span className="text-blue-400 font-mono text-[10px]">jsQR + ZXing ✅</span>
-              </div>
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
-                <span className="text-slate-400 block text-[10px]">مستوى التقريب</span>
-                <span className="text-indigo-400 font-mono text-[10px]">{zoomLevel.toFixed(1)}x {zoomCapabilities.supported ? '(عتاد)' : '(رقمي)'}</span>
-              </div>
-              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
-                <span className="text-slate-400 block text-[10px]">الفواتير بالنظام</span>
-                <span className="text-amber-400 font-mono text-[10px]">{orders.length} طلب</span>
-              </div>
-            </div>
-
-            {/* Last Scanned Code Inspection Card */}
-            {lastDecodedDebug ? (
-              <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400 font-bold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    آخر رمز تم رصده بالكاميرا:
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-black ${
-                      lastDecodedDebug.status === 'matched' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
-                      lastDecodedDebug.status === 'searching' ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/40' :
-                      'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                    }`}>
-                      {lastDecodedDebug.status === 'matched' ? 'مطابق بنجاح ✅' :
-                       lastDecodedDebug.status === 'searching' ? 'جاري البحث ⏳' : 'غير مطابق ⚠️'}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-slate-800 text-slate-300">
-                      {lastDecodedDebug.engine}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Scanned String Display */}
-                <div className="p-2.5 bg-slate-900 rounded-xl font-mono text-xs text-emerald-300 break-all border border-slate-800 max-h-24 overflow-y-auto select-all text-left" dir="ltr">
-                  {lastDecodedDebug.raw}
-                </div>
-
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] text-slate-400 font-bold">
-                    {lastDecodedDebug.details}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(lastDecodedDebug.raw);
-                        setCopiedDebug(true);
-                        setTimeout(() => setCopiedDebug(false), 2000);
-                      }}
-                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
-                    >
-                      {copiedDebug ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                      <span>{copiedDebug ? 'تم النسخ!' : 'نسخ النص'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCodeFound(lastDecodedDebug.raw, 'Manual')}
-                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
-                    >
-                      <RefreshCw size={12} />
-                      <span>إعادة الفحص</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-center text-xs text-slate-400">
-                قم بتوجيه الكاميرا نحو أي QR أو باركود لعرض بيانات الفحص والمطابقة الحية هنا فوراً 📸
-              </div>
-            )}
-
-            {/* Live Scan Log History */}
-            {debugLogs.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <span className="text-[11px] font-bold text-slate-400 block">سجل عمليات الرصد الأخيرة:</span>
-                <div className="max-h-32 overflow-y-auto space-y-1 pr-1 text-[11px] font-mono">
-                  {debugLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="p-1.5 bg-slate-950/70 border border-slate-800/60 rounded-lg flex items-center justify-between gap-2"
-                    >
-                      <div className="flex items-center gap-1.5 truncate">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          log.status === 'matched' ? 'bg-emerald-400' : 'bg-amber-400'
-                        }`} />
-                        <span className="text-slate-400 text-[10px] shrink-0">{log.time}</span>
-                        <span className="text-slate-300 font-bold truncate max-w-[180px] text-left" dir="ltr">
-                          {log.raw}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-[9px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
-                          {log.engine}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleCodeFound(log.raw, 'Manual')}
-                          className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-bold px-1 cursor-pointer"
-                        >
-                          فحص
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Manual Test Field in Debugger */}
-            <div className="pt-2 border-t border-slate-800 flex gap-2">
-              <input
-                type="text"
-                placeholder="جرب إدخال نص أو رمز لاختبار مطابقته..."
-                value={testInputDebug}
-                onChange={e => setTestInputDebug(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none focus:border-indigo-500"
-              />
-              <button
-                type="button"
-                disabled={!testInputDebug.trim()}
-                onClick={() => {
-                  if (testInputDebug.trim()) {
-                    handleCodeFound(testInputDebug.trim(), 'Manual');
-                  }
-                }}
-                className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs transition-all cursor-pointer shrink-0"
-              >
-                اختبار المطابقة
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Modal Body */}
         <div className="p-6 md:p-8 space-y-6">
@@ -1378,31 +1178,17 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                     )}
                   </div>
 
-                  {/* Guide text & Active Zoom Indicator */}
+                  {/* Guide text */}
                   <div className="mt-3 flex items-center gap-2">
                     <span className="px-3.5 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md text-white text-xs font-black shadow-md border border-white/10">
                       {isProcessing ? 'جاري معالجة الرمز والطلب...' : 'وجه الكاميرا نحو رمز QR أو الباركود'}
                     </span>
-                    {zoomLevel > 1 && (
-                      <span className="px-2 py-1 rounded-full bg-indigo-600/90 text-white text-[11px] font-black shadow-md font-mono">
-                        {zoomLevel.toFixed(1)}x
-                      </span>
-                    )}
                   </div>
                 </div>
 
                 {/* Camera Top Controls */}
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-auto">
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSoundEnabled(!soundEnabled)}
-                      className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                      title={soundEnabled ? 'كتم الصوت' : 'تفعيل صوت المسح'}
-                    >
-                      {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-                    </button>
-
                     {/* Flashlight / Torch toggle button */}
                     {torchSupported && (
                       <button
@@ -1430,49 +1216,6 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                     <span className="text-[11px] font-bold">تبديل الكاميرا</span>
                   </button>
                 </div>
-
-                {/* Camera Bottom Zoom Controls */}
-                <div className="absolute bottom-3 inset-x-3 flex items-center justify-center gap-1.5 pointer-events-auto">
-                  <div className="flex items-center gap-1 bg-slate-900/80 backdrop-blur-md px-2 py-1.5 rounded-2xl border border-white/10 shadow-xl">
-                    {/* Zoom Out Button */}
-                    <button
-                      type="button"
-                      onClick={() => applyZoom(zoomLevel - 0.5)}
-                      disabled={zoomLevel <= zoomCapabilities.min}
-                      className="p-1.5 rounded-xl text-white hover:bg-white/20 disabled:opacity-40 transition-all cursor-pointer"
-                      title="تصغير الكاميرا"
-                    >
-                      <ZoomOut size={15} />
-                    </button>
-
-                    {/* Quick Preset Zoom Chips */}
-                    {[1, 1.5, 2, 3].map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        onClick={() => applyZoom(preset)}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-black font-mono transition-all cursor-pointer ${
-                          Math.abs(zoomLevel - preset) < 0.1
-                            ? 'bg-indigo-600 text-white shadow-sm scale-105'
-                            : 'text-slate-300 hover:text-white hover:bg-white/10'
-                        }`}
-                      >
-                        {preset}x
-                      </button>
-                    ))}
-
-                    {/* Zoom In Button */}
-                    <button
-                      type="button"
-                      onClick={() => applyZoom(zoomLevel + 0.5)}
-                      disabled={zoomLevel >= zoomCapabilities.max}
-                      className="p-1.5 rounded-xl text-white hover:bg-white/20 disabled:opacity-40 transition-all cursor-pointer"
-                      title="تكبير الكاميرا"
-                    >
-                      <ZoomIn size={15} />
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {/* Error Banner */}
@@ -1487,14 +1230,6 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                   <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200/60">
                     <button
                       type="button"
-                      onClick={() => setShowDebugger(true)}
-                      className="px-3 py-1.5 bg-amber-200/90 hover:bg-amber-300 text-amber-950 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Bug size={13} />
-                      <span>فتح مصحح الأخطاء لرؤية النص الخام 🛠️</span>
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => {
                         setCameraError(null);
                         isProcessingRef.current = false;
@@ -1502,9 +1237,9 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                         setIsScanning(true);
                         startCamera();
                       }}
-                      className="px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs font-black transition-all cursor-pointer"
+                      className="px-3.5 py-2 bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5"
                     >
-                      متابعة المسح 📸
+                      <span>متابعة المسح 📸</span>
                     </button>
                   </div>
                 </div>
