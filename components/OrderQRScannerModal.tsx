@@ -29,11 +29,74 @@ import {
   MessageSquare,
   ZoomIn,
   ZoomOut,
-  Sparkles
+  Sparkles,
+  Bug,
+  Copy,
+  Terminal,
+  FileText,
+  AlertTriangle,
+  Info
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { supabase } from '../supabase';
 import { normalizeArabicDigits } from '../services/hardwareBarcodeScanner';
+
+// Interface for live scanner diagnostic debugger
+export interface ScanDebugEntry {
+  id: string;
+  time: string;
+  raw: string;
+  engine: 'BarcodeDetector' | 'jsQR' | 'ZXing' | 'Manual';
+  format?: string;
+  status: 'matched' | 'not_found' | 'error' | 'searching';
+  matchedOrderNumber?: string;
+  details?: string;
+}
+
+// ZATCA Saudi E-Invoice TLV Base64 Parser
+export function parseZatcaTlv(raw: string): { seller?: string; vatNumber?: string; timestamp?: string; total?: number; vatTotal?: number } | null {
+  try {
+    const trimmed = raw.trim();
+    if (!/^[A-Za-z0-9+/=]+$/.test(trimmed) || trimmed.length < 24) return null;
+    
+    // Attempt standard Base64 decode
+    const binary = atob(trimmed);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    
+    let pos = 0;
+    const result: { seller?: string; vatNumber?: string; timestamp?: string; total?: number; vatTotal?: number } = {};
+    const textDecoder = new TextDecoder('utf-8');
+    
+    while (pos + 2 <= bytes.length) {
+      const tag = bytes[pos];
+      const len = bytes[pos + 1];
+      if (pos + 2 + len > bytes.length) break;
+      const valBytes = bytes.slice(pos + 2, pos + 2 + len);
+      const valStr = textDecoder.decode(valBytes);
+      
+      if (tag === 1) result.seller = valStr;
+      else if (tag === 2) result.vatNumber = valStr;
+      else if (tag === 3) result.timestamp = valStr;
+      else if (tag === 4) {
+        const num = parseFloat(valStr.replace(/[^\d.]/g, ''));
+        if (!isNaN(num)) result.total = num;
+      }
+      else if (tag === 5) {
+        const num = parseFloat(valStr.replace(/[^\d.]/g, ''));
+        if (!isNaN(num)) result.vatTotal = num;
+      }
+      pos += 2 + len;
+    }
+    
+    if (result.seller || result.total !== undefined) return result;
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
 
 interface OrderQRScannerModalProps {
   isOpen: boolean;
@@ -91,6 +154,13 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   const [torchSupported, setTorchSupported] = useState<boolean>(false);
   const [torchOn, setTorchOn] = useState<boolean>(false);
   const [scanSuccessPulse, setScanSuccessPulse] = useState<boolean>(false);
+
+  // Debugger states
+  const [showDebugger, setShowDebugger] = useState<boolean>(false);
+  const [debugLogs, setDebugLogs] = useState<ScanDebugEntry[]>([]);
+  const [lastDecodedDebug, setLastDecodedDebug] = useState<ScanDebugEntry | null>(null);
+  const [copiedDebug, setCopiedDebug] = useState<boolean>(false);
+  const [testInputDebug, setTestInputDebug] = useState<string>('');
 
   // Initialize ZXing MultiFormatReader
   if (!zxingReaderRef.current) {
@@ -353,7 +423,39 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     // Cleaned version without leading hash or spaces
     const cleanRaw = raw.replace(/^#+/, '').trim();
 
-    // 0. URL matching (if QR contains a full order URL)
+    // 0. JSON format matching (if QR is encoded as JSON object)
+    if (raw.startsWith('{') && raw.endsWith('}')) {
+      try {
+        const json = JSON.parse(raw);
+        const candidate = json.order_number || json.orderNumber || json.order || json.id || json.invoice_number || json.invoice || json.num || json.no;
+        if (candidate) {
+          const candStr = normalizeArabicDigits(String(candidate)).replace(/^#+/, '').trim();
+          const match = orders.find(o => 
+            o.order_number === candStr || 
+            o.id === candStr || 
+            (o.order_number && o.order_number.toLowerCase() === candStr.toLowerCase())
+          );
+          if (match) return match;
+        }
+      } catch (e) {}
+    }
+
+    // 1. ZATCA Saudi E-Invoice TLV Base64 matching
+    const zatca = parseZatcaTlv(raw);
+    if (zatca && zatca.total !== undefined) {
+      // Find orders with matching total amount
+      const matchingByTotal = orders.filter(o => Math.abs(Number(o.total) - Number(zatca.total)) < 0.05);
+      if (matchingByTotal.length === 1) {
+        return matchingByTotal[0];
+      } else if (matchingByTotal.length > 1) {
+        // Prioritize orders not already Ready or Delivered, or most recently updated
+        const active = matchingByTotal.find(o => o.status !== 'Ready' && o.status !== 'Delivered');
+        if (active) return active;
+        return matchingByTotal[0];
+      }
+    }
+
+    // 2. URL matching (if QR contains a full order URL)
     if (raw.startsWith('http://') || raw.startsWith('https://')) {
       try {
         const url = new URL(raw);
@@ -383,7 +485,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       } catch (urlErr) {}
     }
 
-    // 1. Direct match with order_number or id (case-insensitive)
+    // 3. Direct match with order_number or id (case-insensitive)
     let target = orders.find(o => 
       o.order_number === raw || 
       o.order_number === cleanRaw ||
@@ -394,7 +496,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     );
     if (target) return target;
 
-    // 2. Extract number from pattern like #1234 or رقم الفاتورة: #1234 or رقم الفاتورة: 1234 or ORD-1234
+    // 4. Extract number from pattern like #1234 or رقم الفاتورة: #1234 or رقم الفاتورة: 1234 or ORD-1234
     const invoiceNumMatch = raw.match(/(?:رقم الفاتورة|الطلب|فاتورة|Invoice|Order|ORD|معرف الطلب)[^\d#]*#?\s*([a-zA-Z0-9_\u0660-\u0669-]+)/i) ||
                             raw.match(/#\s*([a-zA-Z0-9_\u0660-\u0669-]+)/);
     
@@ -411,21 +513,32 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       if (target) return target;
     }
 
-    // 3. Match UUID pattern
+    // 5. Match UUID pattern
     const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     if (uuidMatch) {
       target = orders.find(o => o.id === uuidMatch[0]);
       if (target) return target;
     }
 
-    // 4. Match if any order's order_number exists as a distinct token or substring
+    // 6. Match if any order's order_number exists as a distinct token or word
+    const tokens = raw.split(/[\s,;:\n\r\t/|\\-]+/).filter(t => t.length >= 2);
+    for (const token of tokens) {
+      const cleanToken = token.replace(/^[#№]+/, '').trim();
+      const tokenMatch = orders.find(o => 
+        o.order_number === cleanToken || 
+        o.id === cleanToken ||
+        (o.order_number && o.order_number.toLowerCase() === cleanToken.toLowerCase())
+      );
+      if (tokenMatch) return tokenMatch;
+    }
+
     for (const ord of orders) {
       if (ord.order_number && ord.order_number.length >= 2 && (raw.includes(ord.order_number) || cleanRaw.includes(ord.order_number))) {
         return ord;
       }
     }
 
-    // 5. Check if scanned text has lines (like formatted invoice QR) and inspect line by line
+    // 7. Check if scanned text has lines (like formatted invoice QR) and inspect line by line
     const lines = raw.split(/[\r\n]+/);
     for (const line of lines) {
       const cleanedLine = line.trim();
@@ -438,16 +551,30 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       }
     }
 
-    // 6. Fallback Supabase query if not found in current loaded orders
+    // 8. Fallback Supabase query if not found in current loaded orders
     try {
       const searchKey = invoiceNumMatch ? invoiceNumMatch[1].replace(/^#+/, '').trim() : cleanRaw;
       const { data } = await supabase
         .from('orders')
         .select('*')
-        .or(`order_number.eq.${searchKey},id.eq.${searchKey},order_number.eq.${raw}`)
+        .or(`order_number.eq.${searchKey},id.eq.${searchKey},order_number.eq.${raw},customer_phone.eq.${raw}`)
         .limit(1);
       if (data && data.length > 0) {
         return data[0] as Order;
+      }
+
+      // If zatca had total, query database by total amount
+      if (zatca && zatca.total !== undefined) {
+        const { data: totalOrders } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('total', zatca.total)
+          .order('created_at', { ascending: false })
+          .limit(3);
+        if (totalOrders && totalOrders.length > 0) {
+          const active = totalOrders.find((o: any) => o.status !== 'Ready' && o.status !== 'Delivered');
+          return (active || totalOrders[0]) as Order;
+        }
       }
     } catch (e) {
       console.warn("Supabase lookup for scanned order failed:", e);
@@ -457,20 +584,20 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   }, [orders]);
 
   // Handle scanned code
-  const handleCodeFound = useCallback(async (code: string) => {
+  const handleCodeFound = useCallback(async (code: string, engine: 'BarcodeDetector' | 'jsQR' | 'ZXing' | 'Manual' = 'BarcodeDetector') => {
     const raw = (code || '').trim();
     if (!raw) return;
 
-    // Check ref-based lock immediately to prevent race conditions across frames
+    // Check ref-based lock immediately to prevent duplicate runs
     if (isProcessingRef.current) return;
 
-    // Check duplicate code cooldown (within 4 seconds)
+    // Check duplicate code cooldown (within 2.5 seconds)
     const now = Date.now();
-    if (lastScannedRef.current && lastScannedRef.current.code === raw && (now - lastScannedRef.current.timestamp < 4000)) {
+    if (lastScannedRef.current && lastScannedRef.current.code === raw && (now - lastScannedRef.current.timestamp < 2500)) {
       return;
     }
 
-    // Immediately acquire lock and pause scanning
+    // Immediately acquire lock and pause scanner loop
     isProcessingRef.current = true;
     isScanningRef.current = false;
     lastScannedRef.current = { code: raw, timestamp: now };
@@ -482,32 +609,78 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
     setIsProcessing(true);
     setIsScanning(false);
-    playBeep();
-    if (navigator.vibrate) {
-      try { navigator.vibrate([100, 50, 100]); } catch (e) {}
-    }
+    setCameraError(null);
+
+    // Record initial search entry in Debugger
+    const debugId = String(Date.now());
+    const initialDebugItem: ScanDebugEntry = {
+      id: debugId,
+      time: new Date().toLocaleTimeString('ar-SA-u-nu-latn'),
+      raw: raw,
+      engine: engine,
+      status: 'searching',
+      details: 'جاري البحث عن الفاتورة في النظام...'
+    };
+    setLastDecodedDebug(initialDebugItem);
+    setDebugLogs(prev => [initialDebugItem, ...prev.slice(0, 14)]);
 
     try {
       const order = await matchOrder(raw);
       if (!order) {
-        setCameraError(`لم يتم العثور على طلب مطابق للرمز الممسوح:\n"${raw.length > 60 ? raw.slice(0, 60) + '...' : raw}"`);
+        // Order not found - clear success pulse and report in debugger & UI
+        setScanSuccessPulse(false);
+        const failItem: ScanDebugEntry = {
+          ...initialDebugItem,
+          status: 'not_found',
+          details: `لم يتم العثور على طلب مطابق للرمز الممسوح (الطول: ${raw.length} حرف)`
+        };
+        setLastDecodedDebug(failItem);
+        setDebugLogs(prev => [failItem, ...prev.filter(l => l.id !== debugId).slice(0, 14)]);
+
+        const engineLabel = engine === 'BarcodeDetector' ? 'محرك العتاد السريع (BarcodeDetector)' :
+                            engine === 'jsQR' ? 'محرك فحص QR (jsQR)' :
+                            engine === 'ZXing' ? 'محرك الباركود الحراري (ZXing)' : 'إدخال يدوي';
+
+        setCameraError(`تمت قراءة الرمز بنجاح [${engineLabel}]:\n"${raw.length > 70 ? raw.slice(0, 70) + '...' : raw}"\n\n⚠️ لم يتم العثور على فاتورة مطابقة لهذا الرمز.`);
         setIsProcessing(false);
         isProcessingRef.current = false;
-        // Resume scanning after 1.5 seconds so user can point at correct code
+        
+        // Resume scanning automatically after 2.5 seconds
         setTimeout(() => {
           if (!isProcessingRef.current) {
             isScanningRef.current = true;
             setIsScanning(true);
           }
-        }, 1500);
+        }, 2500);
         return;
       }
 
+      // Order Found! Trigger success visual feedback, beep and vibration
+      setScanSuccessPulse(true);
+      playBeep();
+      if (navigator.vibrate) {
+        try { navigator.vibrate([100, 50, 100]); } catch (e) {}
+      }
+
+      // Log success in debugger
+      const successItem: ScanDebugEntry = {
+        ...initialDebugItem,
+        status: 'matched',
+        matchedOrderNumber: order.order_number,
+        details: `تمت المطابقة بنجاح مع طلب #${order.order_number} (العميل: ${order.customer_name})`
+      };
+      setLastDecodedDebug(successItem);
+      setDebugLogs(prev => [successItem, ...prev.filter(l => l.id !== debugId).slice(0, 14)]);
+
       // Update Order Status to 'Ready' (جاهز للاستلام) with skipNotification: true
-      // OrderQRScannerModal handles its own single notification below
       await onOrderUpdated(order.id, 'Ready', { skipNotification: true });
       const updatedOrder: Order = { ...order, status: 'Ready' };
-      setProcessedOrder(updatedOrder);
+
+      // Transition smoothly to result card after a brief visual confirmation pulse
+      setTimeout(() => {
+        setProcessedOrder(updatedOrder);
+        setScanSuccessPulse(false);
+      }, 500);
 
       // Construct ready notification message
       const smartMessage = `مرحباً ${order.customer_name}، يسعدنا إبلاغك بأن طلبك رقم #${order.order_number} في ${laundryName || 'مغسلة عود ونظافة'} قد تم الانتهاء منه بالكامل وهو جاهز للاستلام الآن! 🧺✨\n\n📦 رقم الفاتورة: #${order.order_number}\n💰 المبلغ الإجمالي: ${order.total.toFixed(2)} ر.س\n📍 حالة السداد: ${order.is_paid ? 'مسددة بالكامل ✅' : 'المبلغ مستحق عند الاستلام ⏳'}\n\nنرجو التفضل بزيارتنا لاستلامه. نسعد دائماً بخدمتكم! 🌟`;
@@ -602,6 +775,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
         try {
           let detectedCode: string | null = null;
+          let detectedEngine: 'BarcodeDetector' | 'jsQR' | 'ZXing' = 'BarcodeDetector';
 
           // 1. Tier 1: Hardware-Accelerated Native BarcodeDetector (Supported on Android Chrome & modern browsers)
           if (typeof (window as any).BarcodeDetector !== 'undefined') {
@@ -614,6 +788,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               const detectedList = await barcodeDetectorRef.current.detect(video);
               if (detectedList && detectedList.length > 0 && detectedList[0].rawValue) {
                 detectedCode = detectedList[0].rawValue.trim();
+                detectedEngine = 'BarcodeDetector';
               }
             } catch (detectorErr) {
               // Graceful fallback to canvas decoding
@@ -648,6 +823,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               });
               if (fullQr && fullQr.data && fullQr.data.trim()) {
                 detectedCode = fullQr.data.trim();
+                detectedEngine = 'jsQR';
               }
 
               // B. jsQR on Center Reticle Crop (where user centers the paper/tag)
@@ -662,6 +838,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                   });
                   if (centerQr && centerQr.data && centerQr.data.trim()) {
                     detectedCode = centerQr.data.trim();
+                    detectedEngine = 'jsQR';
                   }
                 }
               }
@@ -678,6 +855,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                   const zxResult = zxingReaderRef.current.decode(binaryBitmap);
                   if (zxResult && zxResult.getText()) {
                     detectedCode = zxResult.getText().trim();
+                    detectedEngine = 'ZXing';
                   }
                 } catch (zxErr) {
                   // Barcode not found in this frame
@@ -686,17 +864,14 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
             }
           }
 
-          // If a code was found, trigger success feedback and pass to handler
+          // If a code was found, pass directly to handler
           if (detectedCode && detectedCode.trim()) {
             if (!isProcessingRef.current) {
-              setScanSuccessPulse(true);
-              isProcessingRef.current = true;
-              isScanningRef.current = false;
               if (animFrameRef.current) {
                 cancelAnimationFrame(animFrameRef.current);
                 animFrameRef.current = null;
               }
-              handleCodeFoundRef.current(detectedCode);
+              handleCodeFoundRef.current(detectedCode.trim(), detectedEngine);
               return;
             }
           }
@@ -808,7 +983,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 md:p-6 overflow-y-auto animate-in fade-in duration-200" dir="rtl">
       <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden my-4 relative">
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-violet-800 p-6 text-white flex items-center justify-between">
+        <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-violet-800 p-5 md:p-6 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20 shadow-inner">
               <div className="relative w-6 h-6 flex items-center justify-center text-white">
@@ -823,14 +998,210 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
-            aria-label="إغلاق"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowDebugger(prev => !prev)}
+              className={`px-3 py-2 rounded-2xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                showDebugger
+                  ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-400/30 scale-105'
+                  : 'bg-white/10 hover:bg-white/20 text-white'
+              }`}
+              title="فحص ومصحح الأخطاء المباشر"
+            >
+              <Bug size={16} className={showDebugger ? 'text-slate-950 animate-bounce' : 'text-amber-300'} />
+              <span className="hidden sm:inline">مصحح الأخطاء</span>
+              {debugLogs.length > 0 && (
+                <span className={`w-4 h-4 rounded-full text-[10px] font-black flex items-center justify-center ${
+                  showDebugger ? 'bg-slate-950 text-amber-400' : 'bg-amber-400 text-slate-950'
+                }`}>
+                  {debugLogs.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
+              aria-label="إغلاق"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
+
+        {/* Live Scanner Debugger Panel */}
+        {showDebugger && (
+          <div className="p-4 bg-slate-900 border-b border-slate-800 text-white space-y-4 animate-in slide-in-from-top-3 duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-black text-amber-400">
+                <Terminal size={16} />
+                <span>مصحح قراءة الرموز والفواتير المباشر (Scanner Diagnostics)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {debugLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setDebugLogs([]); setLastDecodedDebug(null); }}
+                    className="text-[10px] font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded-lg transition-all cursor-pointer"
+                  >
+                    مسح السجل
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowDebugger(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Live Engine Status Matrix */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-bold">
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
+                <span className="text-slate-400 block text-[10px]">المحرك المادي</span>
+                <span className="text-emerald-400 font-mono text-[10px]">
+                  {typeof (window as any).BarcodeDetector !== 'undefined' ? 'BarcodeDetector ✅' : 'غير متوفر ❌'}
+                </span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
+                <span className="text-slate-400 block text-[10px]">محركات البرمجيات</span>
+                <span className="text-blue-400 font-mono text-[10px]">jsQR + ZXing ✅</span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
+                <span className="text-slate-400 block text-[10px]">مستوى التقريب</span>
+                <span className="text-indigo-400 font-mono text-[10px]">{zoomLevel.toFixed(1)}x {zoomCapabilities.supported ? '(عتاد)' : '(رقمي)'}</span>
+              </div>
+              <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/50">
+                <span className="text-slate-400 block text-[10px]">الفواتير بالنظام</span>
+                <span className="text-amber-400 font-mono text-[10px]">{orders.length} طلب</span>
+              </div>
+            </div>
+
+            {/* Last Scanned Code Inspection Card */}
+            {lastDecodedDebug ? (
+              <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-bold flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    آخر رمز تم رصده بالكاميرا:
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-black ${
+                      lastDecodedDebug.status === 'matched' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' :
+                      lastDecodedDebug.status === 'searching' ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/40' :
+                      'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                    }`}>
+                      {lastDecodedDebug.status === 'matched' ? 'مطابق بنجاح ✅' :
+                       lastDecodedDebug.status === 'searching' ? 'جاري البحث ⏳' : 'غير مطابق ⚠️'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-slate-800 text-slate-300">
+                      {lastDecodedDebug.engine}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Scanned String Display */}
+                <div className="p-2.5 bg-slate-900 rounded-xl font-mono text-xs text-emerald-300 break-all border border-slate-800 max-h-24 overflow-y-auto select-all text-left" dir="ltr">
+                  {lastDecodedDebug.raw}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-400 font-bold">
+                    {lastDecodedDebug.details}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(lastDecodedDebug.raw);
+                        setCopiedDebug(true);
+                        setTimeout(() => setCopiedDebug(false), 2000);
+                      }}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      {copiedDebug ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                      <span>{copiedDebug ? 'تم النسخ!' : 'نسخ النص'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCodeFound(lastDecodedDebug.raw, 'Manual')}
+                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>إعادة الفحص</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-center text-xs text-slate-400">
+                قم بتوجيه الكاميرا نحو أي QR أو باركود لعرض بيانات الفحص والمطابقة الحية هنا فوراً 📸
+              </div>
+            )}
+
+            {/* Live Scan Log History */}
+            {debugLogs.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <span className="text-[11px] font-bold text-slate-400 block">سجل عمليات الرصد الأخيرة:</span>
+                <div className="max-h-32 overflow-y-auto space-y-1 pr-1 text-[11px] font-mono">
+                  {debugLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="p-1.5 bg-slate-950/70 border border-slate-800/60 rounded-lg flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          log.status === 'matched' ? 'bg-emerald-400' : 'bg-amber-400'
+                        }`} />
+                        <span className="text-slate-400 text-[10px] shrink-0">{log.time}</span>
+                        <span className="text-slate-300 font-bold truncate max-w-[180px] text-left" dir="ltr">
+                          {log.raw}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="text-[9px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded">
+                          {log.engine}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleCodeFound(log.raw, 'Manual')}
+                          className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-bold px-1 cursor-pointer"
+                        >
+                          فحص
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Manual Test Field in Debugger */}
+            <div className="pt-2 border-t border-slate-800 flex gap-2">
+              <input
+                type="text"
+                placeholder="جرب إدخال نص أو رمز لاختبار مطابقته..."
+                value={testInputDebug}
+                onChange={e => setTestInputDebug(e.target.value)}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                disabled={!testInputDebug.trim()}
+                onClick={() => {
+                  if (testInputDebug.trim()) {
+                    handleCodeFound(testInputDebug.trim(), 'Manual');
+                  }
+                }}
+                className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs transition-all cursor-pointer shrink-0"
+              >
+                اختبار المطابقة
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="p-6 md:p-8 space-y-6">
@@ -1106,18 +1477,36 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
               {/* Error Banner */}
               {cameraError && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-xs font-bold flex items-start gap-2.5 text-right">
-                  <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-                  <div className="flex-1 whitespace-pre-line leading-relaxed">
-                    {cameraError}
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-xs font-bold space-y-2.5 text-right animate-in fade-in duration-200">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1 whitespace-pre-line leading-relaxed">
+                      {cameraError}
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => startCamera()}
-                    className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-300 text-amber-900 rounded-lg text-xs font-black shrink-0 transition-all"
-                  >
-                    إعادة المحاولة
-                  </button>
+                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowDebugger(true)}
+                      className="px-3 py-1.5 bg-amber-200/90 hover:bg-amber-300 text-amber-950 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Bug size={13} />
+                      <span>فتح مصحح الأخطاء لرؤية النص الخام 🛠️</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraError(null);
+                        isProcessingRef.current = false;
+                        isScanningRef.current = true;
+                        setIsScanning(true);
+                        startCamera();
+                      }}
+                      className="px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs font-black transition-all cursor-pointer"
+                    >
+                      متابعة المسح 📸
+                    </button>
+                  </div>
                 </div>
               )}
 
