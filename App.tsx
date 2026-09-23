@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   LayoutDashboard, 
   PlusCircle, 
@@ -929,6 +930,21 @@ const App: React.FC = () => {
 
   const [showPrintModal, setShowPrintModal] = useState<Order | null>(null);
   const [invoiceSentNoticeOrderId, setInvoiceSentNoticeOrderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      if (showPrintModal) {
+        document.body.classList.add('has-print-modal');
+      } else {
+        document.body.classList.remove('has-print-modal');
+      }
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('has-print-modal');
+      }
+    };
+  }, [showPrintModal]);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
   const [showEditOrderModal, setShowEditOrderModal] = useState<Order | null>(null);
   const [originalOrder, setOriginalOrder] = useState<Order | null>(null);
@@ -13704,7 +13720,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {showPrintModal && (
+      {showPrintModal && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center z-[200] p-3 sm:p-4 print-modal-overlay">
           <div className="bg-white rounded-3xl w-full max-w-[385px] shadow-2xl relative border border-slate-100 max-h-[90vh] flex flex-col overflow-hidden print-modal-card">
             <button 
@@ -13914,7 +13930,8 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {editingUserProfile && (

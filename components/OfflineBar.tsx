@@ -123,7 +123,7 @@ export const OfflineBar: React.FC<OfflineBarProps> = ({
   return (
     <div
       id="offline-status-banner"
-      className={`w-full shrink-0 transition-all duration-300 px-3 md:px-6 py-2 text-xs md:text-sm font-semibold flex items-center justify-between gap-3 shadow-sm select-none z-50 ${
+      className={`w-full shrink-0 transition-all duration-300 px-3 md:px-6 py-2 text-xs md:text-sm font-semibold flex items-center justify-between gap-3 shadow-sm select-none z-50 no-print ${
         isManualOffline
           ? 'bg-amber-600 text-white border-b border-amber-700'
           : !isOnline
