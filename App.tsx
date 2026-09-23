@@ -447,6 +447,7 @@ const App: React.FC = () => {
   });
   const [isSavingStoreName, setIsSavingStoreName] = useState<boolean>(false);
   const [storeNameSuccessMsg, setStoreNameSuccessMsg] = useState<string | null>(null);
+  const [settingsSubTab, setSettingsSubTab] = useState<'all' | 'store' | 'whatsapp' | 'printer' | 'subscription' | 'offline' | 'backup'>('all');
 
   const [laundries, setLaundries] = useState<any[]>([]);
   const [newStaffForm, setNewStaffForm] = useState<{
@@ -5882,13 +5883,12 @@ const App: React.FC = () => {
     container.style.color = '#0f172a';
     container.style.direction = 'rtl';
     container.style.fontFamily = "'Tajawal', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-    container.style.position = 'absolute';
-    container.style.top = '0';
-    container.style.left = '-9999px';
-    container.style.zIndex = '99999';
+    container.style.letterSpacing = 'normal';
+    container.style.wordSpacing = 'normal';
+    container.style.fontFeatureSettings = '"liga" 1, "calt" 1';
+    container.style.textRendering = 'geometricPrecision';
     container.style.visibility = 'visible';
     container.style.opacity = '1';
-    container.style.pointerEvents = 'none';
 
     container.innerHTML = `
       <!-- Header with Brand & Logo -->
@@ -5898,8 +5898,8 @@ const App: React.FC = () => {
             ${logoLetter}
           </div>
           <div>
-            <h1 style="margin: 0; font-size: 22px; font-weight: 900; color: #0f172a; letter-spacing: -0.5px;">${laundryName}</h1>
-            <p style="margin: 3px 0 0; font-size: 12px; font-weight: 700; color: #64748b;">فاتورة إلكترونية | Electronic Invoice</p>
+            <h1 style="margin: 0; font-size: 22px; font-weight: 900; color: #0f172a; letter-spacing: normal !important; word-spacing: normal !important; font-family: 'Tajawal', sans-serif;">${laundryName}</h1>
+            <p style="margin: 3px 0 0; font-size: 12px; font-weight: 700; color: #64748b; letter-spacing: normal !important;">فاتورة إلكترونية | Electronic Invoice</p>
           </div>
         </div>
         <div style="text-align: left;">
@@ -5919,7 +5919,7 @@ const App: React.FC = () => {
             <tr>
               <td style="padding: 4px 8px 6px; text-align: right; width: 50%;">
                 <span style="font-size: 11px; font-weight: 700; color: #64748b; display: block;">اسم العميل:</span>
-                <span style="font-size: 15px; font-weight: 900; color: #0f172a;">${order.customer_name || 'عميل'}</span>
+                <span style="font-size: 15px; font-weight: 900; color: #0f172a; letter-spacing: normal;">${order.customer_name || 'عميل'}</span>
               </td>
               <td style="padding: 4px 8px 6px; text-align: right; width: 50%;">
                 <span style="font-size: 11px; font-weight: 700; color: #64748b; display: block;">رقم الجوال:</span>
@@ -6015,29 +6015,51 @@ const App: React.FC = () => {
 
       <!-- Store Notice & Legal Disclaimer -->
       <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; text-align: center; margin-bottom: 16px;">
-        <p style="margin: 0; font-size: 11px; font-weight: 700; color: #64748b; line-height: 1.7;">
+        <p style="margin: 0; font-size: 11px; font-weight: 700; color: #64748b; line-height: 1.7; letter-spacing: normal !important;">
           تنويه هام: المغسلة غير مسؤولة عن فقدان أي أغراض شخصية تُترك داخل الملابس عند استلامها، كما لا تتحمل مسؤولية حفظ الملابس أو الأغراض بعد مضي (15) يومًا من تاريخ الاستلام.
         </p>
       </div>
 
-      <div style="text-align: center; font-size: 12px; font-weight: 800; color: #94a3b8;">
+      <div style="text-align: center; font-size: 12px; font-weight: 800; color: #94a3b8; letter-spacing: normal !important; word-spacing: normal !important;">
         شكراً لتعاملكم مع ${laundryName} | نسعد دائماً بخدمتكم
       </div>
     `;
 
-    document.body.appendChild(container);
     return container;
   };
 
   const generateInvoicePdfBlob = async (order: Order, laundryName: string): Promise<Blob> => {
+    // Wait for fonts to ensure Arabic Tajawal is fully loaded before taking snapshot
+    if (document.fonts && document.fonts.ready) {
+      try {
+        await document.fonts.ready;
+      } catch (e) {}
+    }
+
     const container = await createInvoicePdfContainer(order, laundryName);
+
+    // Mount inside an invisible 0x0 fixed wrapper so it NEVER causes mobile layout stretch or white screen flash
+    const wrapper = document.createElement('div');
+    wrapper.id = 'pdf-invoice-wrapper-outer';
+    wrapper.style.position = 'fixed';
+    wrapper.style.top = '0';
+    wrapper.style.left = '0';
+    wrapper.style.width = '0';
+    wrapper.style.height = '0';
+    wrapper.style.overflow = 'hidden';
+    wrapper.style.opacity = '0';
+    wrapper.style.pointerEvents = 'none';
+    wrapper.style.zIndex = '-9999';
+    wrapper.appendChild(container);
+    document.body.appendChild(wrapper);
+
     try {
       // Ensure image (QR code) is decoded
       const qrImg = container.querySelector('img');
       if (qrImg && (qrImg as HTMLImageElement).decode) {
         try { await (qrImg as HTMLImageElement).decode(); } catch (e) {}
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Render directly with imported html2canvas and onclone to bypass viewport/scroll clipping
       const canvas = await html2canvas(container, {
@@ -6057,10 +6079,16 @@ const App: React.FC = () => {
             target.style.visibility = 'visible';
             target.style.opacity = '1';
             target.style.display = 'block';
+            target.style.letterSpacing = 'normal';
+            target.style.wordSpacing = 'normal';
             const allElements = target.querySelectorAll('*');
             allElements.forEach((el: any) => {
               el.style.visibility = 'visible';
               el.style.opacity = '1';
+              if (el.style) {
+                el.style.letterSpacing = 'normal';
+                el.style.wordSpacing = 'normal';
+              }
             });
           }
         }
@@ -6102,7 +6130,9 @@ const App: React.FC = () => {
 
       return pdf.output('blob');
     } finally {
-      if (container && container.parentNode) {
+      if (wrapper && wrapper.parentNode) {
+        wrapper.parentNode.removeChild(wrapper);
+      } else if (container && container.parentNode) {
         container.parentNode.removeChild(container);
       }
     }
@@ -7433,12 +7463,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Store Badge Pill */}
-            <div className="flex items-center gap-1 px-2.5 py-1 bg-slate-50 border border-slate-200/70 rounded-full text-[10px] font-bold text-slate-700">
-              <Store size={12} className="text-blue-600" />
-              <span className="truncate max-w-[80px]">{userProfile?.laundry_name || 'الفرع'}</span>
-            </div>
-
             {/* Offline Mode Toggle Button */}
             <button
               type="button"
@@ -10155,663 +10179,782 @@ const App: React.FC = () => {
         )}
 
         {activeTab === 'settings' && (
-          <div className="max-w-4xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-            {/* Store Profile & Name Card */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600"></div>
-
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <Building size={28} />
+          <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-in slide-in-from-bottom-3 duration-300 pb-16 px-2 sm:px-4 text-right" dir="rtl">
+            {/* Settings Page Header & Subtab Bar */}
+            <div className="bg-white rounded-3xl p-5 sm:p-7 shadow-sm border border-slate-200/80 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 bg-gradient-to-tr from-indigo-600 to-blue-600 text-white rounded-2xl flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
+                    <SlidersHorizontal size={24} />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-2xl font-black text-slate-900">هوية واسم المغسلة التجارية</h3>
-                      <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-black rounded-full border border-indigo-100 flex items-center gap-1">
-                        <Sparkles size={12} /> تظهر في الفواتير والواتساب
-                      </span>
-                    </div>
-                    <p className="text-slate-400 font-bold text-xs mt-1">
-                      يمكنك تغيير الاسم التجاري لمغسلتك في أي وقت، مع الحفاظ التام على معرف المغسلة (Store ID) دون التأثير على أي طلبات سابقة
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">إعدادات النظام والمغسلة</h2>
+                    <p className="text-slate-400 font-bold text-xs mt-0.5">
+                      تخصيص هوية المتجر، الربط بالواتساب، طابعة الفواتير، والنسخ الاحتياطي
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2.5 bg-slate-50 px-4 py-2.5 rounded-2xl border border-slate-200/80">
-                  <Lock size={16} className="text-indigo-600 shrink-0" />
-                  <div className="text-right">
-                    <span className="text-[10px] font-black text-slate-400 block">معرف المغسلة الثابت (Store ID)</span>
-                    <span className="text-xs font-mono font-black text-slate-700 dir-ltr inline-block">
-                      {userProfile?.laundry_id || 'غير محدد'}
-                    </span>
-                  </div>
+                <div className="flex items-center gap-2 self-start sm:self-auto bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-2xl">
+                  <Store size={14} className="text-indigo-600" />
+                  <span className="text-xs font-black text-slate-700 truncate max-w-[160px]">
+                    {userProfile?.laundry_name || 'مغسلتك'}
+                  </span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                 </div>
               </div>
 
-              {/* Success Notification Banner */}
-              {storeNameSuccessMsg && (
-                <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 text-xs font-bold flex items-center gap-3 animate-in fade-in duration-300">
-                  <Check size={18} className="text-emerald-600 shrink-0" />
-                  <span>{storeNameSuccessMsg}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleSaveStoreName} className="space-y-5">
-                <div>
-                  <label className="block text-xs font-black text-slate-700 mb-2">
-                    الاسم التجاري للمغسلة <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <Building className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input
-                      placeholder="اسم مغسلتك التجارية"
-                      className="w-full pr-12 pl-4 py-4 bg-slate-50 border rounded-2xl outline-none font-bold focus:ring-4 focus:ring-indigo-500/10 transition-all text-sm"
-                      required
-                      type="text"
-                      value={storeNameSettingsInput}
-                      onChange={(e) => setStoreNameSettingsInput(e.target.value)}
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-400 font-bold mt-2">
-                    هذا الاسم هو ما يظهر في ترويسة الفواتير المطبوعة (A4 والفواتير الحرارية) ونصوص رسائل الواتساب الصامتة المرسلة للعملاء.
-                  </p>
-                </div>
-
-                <div className="flex items-center justify-end gap-3 pt-2">
-                  <button
-                    type="submit"
-                    disabled={isSavingStoreName || !storeNameSettingsInput.trim()}
-                    className="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-50 text-white rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 transition-all flex items-center gap-2 cursor-pointer"
-                  >
-                    {isSavingStoreName ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        <span>جاري حفظ الاسم...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save size={16} />
-                        <span>حفظ اسم المغسلة الجديد</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {/* Background WhatsApp Card */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600"></div>
-
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <MessageCircle size={28} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-2xl font-black text-slate-900">الربط مع الواتساب</h3>
-                      <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-black rounded-full border border-emerald-100 flex items-center gap-1">
-                        <Sparkles size={12} /> مفتوح المصدر ومجاني 100%
-                      </span>
-                    </div>
-                    <p className="text-slate-400 font-bold text-xs mt-1">
-                      إرسال صامت وتلقائي للرسائل والفواتير PDF إلى واتساب العميل مباشرة فور حفظ الطلب في (كاشير جديد) دون فتح أي تطبيق خارجي
-                    </p>
-                  </div>
-                </div>
+              {/* Responsive Sub-tabs Navigation */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar scrollbar-none pb-1 -mx-2 px-2 sm:mx-0 sm:px-0">
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('all')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'all'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
+                >
+                  <Sparkles size={14} />
+                  <span>جميع الإعدادات</span>
+                </button>
 
                 <button
                   type="button"
-                  onClick={() => setShowWhatsAppBotModal(true)}
-                  className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 cursor-pointer"
+                  onClick={() => setSettingsSubTab('store')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'store'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
                 >
-                  <QrCode size={16} /> {whatsAppBotStatus.isConnected ? 'إدارة الاتصال بالواتساب' : 'ربط جوال المغسلة (مسح رمز QR)'}
+                  <Building size={14} />
+                  <span>هوية المغسلة</span>
                 </button>
-              </div>
-
-              {/* Status & Options Overview */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">حالة الارتباط</span>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-black ${
-                      whatsAppBotStatus.isConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      <span className={`w-2 h-2 rounded-full ${whatsAppBotStatus.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                      {whatsAppBotStatus.isConnected ? 'متصل بنشاط (سحابياً) ✅' : 'غير مرتبط (امسح QR) ⚠️'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">رقم الجوال المرتبط (سحابي)</span>
-                  <div className="mt-2">
-                    <span className="text-base font-black text-slate-800 dir-ltr inline-block">
-                      {whatsAppBotStatus.userPhone || 'لم يتم ربط رقم بعد'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">الإرسال التلقائي في كاشير جديد</span>
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="text-xs font-black text-indigo-900">
-                      {whatsAppBotAutoSend ? 'مفعل تلقائياً 🚀' : 'معطل'}
-                    </span>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={whatsAppBotAutoSend}
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setWhatsAppBotAutoSend(val);
-                          localStorage.setItem('laundry_whatsapp_bot_auto_send', val ? 'true' : 'false');
-                          (async () => {
-                            try {
-                              await supabase.from('settings').upsert({
-                                key: 'laundry_whatsapp_bot_auto_send',
-                                value: { enabled: val },
-                                updated_at: new Date().toISOString()
-                              }, { onConflict: 'key' });
-                            } catch (e) {}
-                          })();
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* WhatsApp Info Banner */}
-              <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-2xl flex items-start gap-3">
-                <ShieldCheck size={20} className="text-emerald-600 shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-900 leading-relaxed font-bold">
-                  <p>
-                    <span className="font-black">كيف يعمل الإرسال الصامت؟</span> تعتمد هذه الميزة على الربط المباشر مع جوال المغسلة عبر السيرفر. عند ربط الجوال مرة واحدة بمسح رمز QR، يصبح السيرفر قادراً على إرسال نص الفاتورة الرسمية وملف الـ PDF مباشرة لواتساب العميل بدون فتح أي شاشة أو تطبيق على جهاز الكاشير، وبشكل مجاني 100% دون الحاجة لاشتراكات أو خدمات وسيطة مدفوعة.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* USB Thermal Printer Card */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700"></div>
-
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <Printer size={28} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-2xl font-black text-slate-900">طابعة الفواتير الحرارية (USB POS Thermal Printer)</h3>
-                      <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-black rounded-full border border-indigo-100 flex items-center gap-1">
-                        <Sparkles size={12} /> مقاس 80mm / 58mm
-                      </span>
-                    </div>
-                    <p className="text-slate-400 font-bold text-xs mt-1">
-                      الطباعة التلقائية للفواتير فور الضغط على زر (حفظ) في الكاشير عبر طابعات الإيصالات الحرارية المتصلة بالـ USB
-                    </p>
-                  </div>
-                </div>
 
                 <button
                   type="button"
-                  onClick={() => {
-                    if (orders.length > 0) {
-                      setShowPrintModal(orders[0]);
-                      setTimeout(() => window.print(), 350);
-                    } else {
-                      window.print();
-                    }
-                  }}
-                  className="px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 transition-all flex items-center gap-2 cursor-pointer"
+                  onClick={() => setSettingsSubTab('whatsapp')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'whatsapp'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
                 >
-                  <Printer size={16} /> طباعة تجريبية الآن
+                  <MessageCircle size={14} />
+                  <span>الواتساب الصامت</span>
+                  {whatsAppBotStatus.isConnected && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  )}
                 </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-black text-slate-400 block uppercase">الطباعة التلقائية عند الحفظ</span>
-                    <span className="text-sm font-black text-slate-800 mt-1 block">
-                      {autoPrintThermalOnSave ? 'مفعلة تلقائياً فور الحفظ ✅' : 'معطلة (طباعة يدوية)'}
-                    </span>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoPrintThermalOnSave}
-                      onChange={(e) => {
-                        setAutoPrintThermalOnSave(e.target.checked);
-                        localStorage.setItem('laundry_auto_print_thermal', e.target.checked ? 'true' : 'false');
-                      }}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                  </label>
-                </div>
-
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-black text-slate-400 block uppercase">نوع الورق المدعوم</span>
-                    <span className="text-sm font-black text-slate-800 mt-1 block">رول حراري 80mm و 58mm قياسي</span>
-                  </div>
-                  <span className="px-3 py-1 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-700">
-                    POS Roll
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-4 bg-indigo-50/60 border border-indigo-100 rounded-2xl flex items-start gap-3">
-                <Sparkles size={20} className="text-indigo-600 shrink-0 mt-0.5" />
-                <div className="text-xs text-indigo-950 leading-relaxed font-bold">
-                  <p>
-                    <span className="font-black">ملاحظة للطابعات المتصلة بـ USB:</span> عند الضغط على زر حفظ، يفتح المتصفح أمر الطباعة مباشرة. لتفعيل الطباعة الصامتة الفورية دون الحاجة لتأكيد المتصفح في كل مرة، يمكنك فتح المتصفح مع تفعيل خيار Kiosk Printing: <span className="font-mono bg-white px-2 py-0.5 rounded border border-indigo-200 text-indigo-900" dir="ltr">--kiosk-printing</span> واختيار طابعة الـ USB كطابعة افتراضية.
-                  </p>
-                </div>
-              </div>
-
-              {/* QR & Barcode Scanner Integration */}
-              <div className="mt-4 p-5 bg-gradient-to-r from-emerald-50/90 to-teal-50/90 rounded-2xl border border-emerald-200/80 flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-emerald-600 text-white rounded-2xl flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0">
-                    <QrCode size={24} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-black text-emerald-950">المسح المباشر بقارئ الباركود والـ QR (Hardware Scanner)</h4>
-                      <span className="px-2.5 py-0.5 bg-emerald-200/60 text-emerald-900 text-[10px] font-black rounded-full">
-                        نشط تلقائياً ⚡
-                      </span>
-                    </div>
-                    <p className="text-emerald-800 text-xs font-bold mt-1 leading-relaxed max-w-xl">
-                      عند مسح رمز الـ QR أو الباركود لأي فاتورة أو منتج مطبوع عبر طابعة الفواتير الحرارية، يقوم النظام فوراً بتحويل الطلب إلى (جاهز للاستلام) وإرسال رسالة الواتساب للعميل تلقائياً تماماً كالمسح بكاميرا الجوال!
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="px-3 py-1.5 bg-white text-emerald-700 text-xs font-black rounded-xl border border-emerald-200 flex items-center gap-1.5 shadow-xs">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    جاهز للمسح المباشر في أي وقت
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Laundry Subscription Control Card */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              {/* Top Accent Gradient */}
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600"></div>
-
-              {/* Header */}
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <CreditCard size={28} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-2xl font-black text-slate-900">إدارة اشتراك مغسلتك</h3>
-                      <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-black rounded-full border border-emerald-100 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                        نظام مفعل
-                      </span>
-                    </div>
-                    <p className="text-slate-400 font-bold text-xs mt-1">متابعة باقة المغسلة، حالة الحساب، وتجديد الاشتراك في المنصة</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setShowSaaSPaymentModal(true)}
-                  className="px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 transition-all flex items-center gap-2"
-                >
-                  <Sparkles size={16} /> تجديد اشتراك المغسلة الحالي
-                </button>
-              </div>
-
-              {/* Status Overview Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">الباقة النشطة</span>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="text-lg font-black text-slate-800">
-                      {userProfile?.saas_plan === 'basic' ? 'الباقة الأساسية' :
-                       userProfile?.saas_plan === 'gold' ? 'الباقة الذهبية' :
-                       userProfile?.saas_plan === 'silver' ? 'الباقة الفضية' :
-                       userProfile?.saas_plan === 'platinum' ? 'الباقة البلاتينية' : 'الباقة التجريبية'}
-                    </span>
-                    <span className="text-base">
-                      {userProfile?.saas_plan === 'basic' ? '🌟' :
-                       userProfile?.saas_plan === 'gold' ? '👑' :
-                       userProfile?.saas_plan === 'silver' ? '🥈' :
-                       userProfile?.saas_plan === 'platinum' ? '💎' : '⏳'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">حالة الباقة</span>
-                  <div className="mt-2">
-                    <span className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-black ${
-                      userProfile?.saas_status === 'active' ? 'bg-emerald-100 text-emerald-800' :
-                      userProfile?.saas_status === 'trial' ? 'bg-amber-100 text-amber-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {userProfile?.saas_status === 'active' ? 'نشط ✅' :
-                       userProfile?.saas_status === 'trial' ? 'فترة تجريبية ⏳' : 'منتهي الصلاحية ⚠️'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
-                  <span className="text-xs font-black text-slate-400 uppercase">تاريخ التجديد القادم</span>
-                  <p className="text-base font-black text-indigo-900 mt-2">
-                    {userProfile?.saas_expiry && !isNaN(new Date(userProfile.saas_expiry).getTime()) ? new Date(userProfile.saas_expiry).toLocaleDateString('ar-SA', {
-                      year: 'numeric',
-                      month: 'long',
-                      day: 'numeric'
-                    }) : 'مستمر (غير محدود)'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Subscription Plans Available */}
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                  <h4 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Zap size={20} className="text-amber-500" /> باقات منصة غسيل كلاود المتاحة
-                  </h4>
-                  <span className="text-[11px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
-                    ⚠️ الأسعار الموضحة لا تشمل ضريبة القيمة المضافة
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                  {/* Basic Plan Card */}
-                  <div className={`p-6 rounded-3xl border-2 transition-all flex flex-col justify-between ${
-                    userProfile?.saas_plan === 'basic' ? 'bg-indigo-50/80 border-indigo-500 shadow-md ring-2 ring-indigo-200' : 'bg-white border-slate-200 hover:border-slate-300'
-                  }`}>
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <span className="px-3.5 py-1.5 bg-indigo-100 text-indigo-700 font-black text-xs rounded-full inline-flex items-center gap-1.5">
-                          🌟 الباقة الأساسية
-                        </span>
-                        {userProfile?.saas_plan === 'basic' && (
-                          <span className="px-3 py-1 bg-emerald-500 text-white font-black text-[10px] rounded-full shadow-sm">
-                            بافتك الحالية ✅
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 font-bold">الخيار الأمثل للبدء والاستمتاع بالخدمة.</p>
-                      
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-right space-y-1">
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-2xl font-black text-slate-900">105</span>
-                          <span className="text-xs font-bold text-slate-500">ريال / شهرياً</span>
-                        </div>
-                        <p className="text-xs font-bold text-slate-600">
-                          الاشتراك السنوي: <span className="font-black text-indigo-900">1,050 ريال / سنوياً</span>
-                        </p>
-                        <p className="text-[11px] font-black text-emerald-600 pt-0.5">
-                          🎁 (وفر 17% — احصل على شهرين مجاناً!)
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="pt-6">
-                      <button
-                        onClick={() => setShowSaaSPaymentModal(true)}
-                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md transition-all active:scale-95"
-                      >
-                        {userProfile?.saas_plan === 'basic' ? 'تجديد الباقة الأساسية' : 'الاشتراك في الباقة الأساسية'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Gold Plan Card */}
-                  <div className={`p-6 rounded-3xl border-2 transition-all flex flex-col justify-between ${
-                    userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic') ? 'bg-amber-50/80 border-amber-400 shadow-md ring-2 ring-amber-200' : 'bg-white border-slate-200 hover:border-slate-300'
-                  }`}>
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <span className="px-3.5 py-1.5 bg-amber-100 text-amber-800 font-black text-xs rounded-full inline-flex items-center gap-1.5">
-                          👑 الباقة الذهبية
-                        </span>
-                        {(userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic')) && (
-                          <span className="px-3 py-1 bg-amber-500 text-white font-black text-[10px] rounded-full shadow-sm">
-                            بافتك الحالية ✅
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-amber-900/80 font-bold">للتجربة المكتملة والمميزات الإضافية.</p>
-                      
-                      <div className="p-4 bg-amber-100/50 rounded-2xl border border-amber-200/60 text-right space-y-1">
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-2xl font-black text-amber-950">150</span>
-                          <span className="text-xs font-bold text-amber-800">ريال / شهرياً</span>
-                        </div>
-                        <p className="text-xs font-bold text-amber-900">
-                          الاشتراك السنوي: <span className="font-black text-amber-950">1,550 ريال / سنوياً</span>
-                        </p>
-                        <p className="text-[11px] font-black text-amber-700 pt-0.5">
-                          🎁 (وفر 14% — أكثر من شهر ونصف مجاناً!)
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="pt-6">
-                      <button
-                        onClick={() => setShowSaaSPaymentModal(true)}
-                        className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-indigo-950 font-black text-xs rounded-xl shadow-md transition-all active:scale-95"
-                      >
-                        {(userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic')) ? 'تجديد الباقة الذهبية 👑' : 'الترقية للباقة الذهبية 👑'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Offline Mode Configuration Card in Settings */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              {/* Top Accent Gradient */}
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600"></div>
-
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-6 border-b border-slate-100 pb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <CloudOff size={28} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-2xl font-black text-slate-900">وضع العمل بدون إنترنت (الأوفلاين)</h3>
-                      <span className={`px-3 py-1 text-xs font-black rounded-full border flex items-center gap-1.5 ${
-                        isManualOffline()
-                          ? 'bg-amber-100 text-amber-900 border-amber-300'
-                          : 'bg-slate-100 text-slate-700 border-slate-200'
-                      }`}>
-                        <span className={`w-2 h-2 rounded-full ${isManualOffline() ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`}></span>
-                        {isManualOffline() ? 'الوضع مفعل حالياً (أوفلاين)' : 'الوضع متوقف (افتراضي - أونلاين)'}
-                      </span>
-                    </div>
-                    <p className="text-slate-400 font-bold text-xs mt-1">
-                      تحكم بوضع عدم الاتصال، واختيار عدد الطلبات المراد حفظها محلياً (30، 50، 100، 200، 300، 500، 1000 أو الكل)، والتبديل بين الأوفلاين والمزامنة التلقائية.
-                    </p>
-                  </div>
-                </div>
 
                 <button
                   type="button"
-                  onClick={() => setIsOfflineModalOpen(true)}
-                  className="px-6 py-3.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white rounded-2xl font-black text-xs shadow-lg shadow-amber-200 transition-all flex items-center gap-2 cursor-pointer"
+                  onClick={() => setSettingsSubTab('printer')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'printer'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
                 >
-                  <CloudOff size={16} /> فتح إعدادات وحفظ الأوفلاين
+                  <Printer size={14} />
+                  <span>طابعة الفواتير والباركود</span>
                 </button>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-bold">
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1">
-                  <span className="text-slate-400 block text-[11px]">حالة الأوفلاين الحالية</span>
-                  <span className={`text-sm font-black ${isManualOffline() ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {isManualOffline() ? '🟡 وضع غير متصل يدوي (Offline)' : '🟢 متصل بالإنترنت وقاعدة البيانات'}
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('subscription')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'subscription'
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
+                >
+                  <CreditCard size={14} />
+                  <span>باقة الاشتراك</span>
+                </button>
 
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1">
-                  <span className="text-slate-400 block text-[11px]">حد حفظ الطلبات المختار</span>
-                  <span className="text-sm font-black text-indigo-900">
-                    {getOfflineCacheLimit() === 'all' ? 'جميع البيانات والطلبات' : `آخر ${getOfflineCacheLimit()} طلب`}
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('offline')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'offline'
+                      ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
+                >
+                  <CloudOff size={14} />
+                  <span>وضع الأوفلاين</span>
+                  {isManualOffline() && (
+                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  )}
+                </button>
 
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1">
-                  <span className="text-slate-400 block text-[11px]">الطلبات المحفوظة محلياً</span>
-                  <span className="text-sm font-black text-slate-800">
-                    {(() => {
-                      try {
-                        const local = localStorage.getItem(`laundry_orders_${userProfile?.laundry_id}`) || localStorage.getItem('laundry_orders');
-                        if (local) {
-                          const parsed = JSON.parse(local);
-                          return Array.isArray(parsed) ? `${parsed.length} طلب محفوظ` : 'لا يوجد';
-                        }
-                      } catch (e) {}
-                      return 'لا يوجد بيانات مخزنة';
-                    })()}
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('backup')}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black whitespace-nowrap transition-all flex items-center gap-2 shrink-0 ${
+                    settingsSubTab === 'backup'
+                      ? 'bg-teal-600 text-white shadow-md shadow-teal-600/20'
+                      : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/60'
+                  }`}
+                >
+                  <Database size={14} />
+                  <span>النسخ الاحتياطي</span>
+                </button>
               </div>
             </div>
 
-            {/* Data Backup & Restore Section */}
-            <div className="bg-white rounded-[2.5rem] p-8 md:p-10 shadow-xl border border-slate-100 text-right overflow-hidden relative">
-              {/* Top Accent Gradient */}
-              <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600"></div>
+            {/* 1. Store Profile & Name Card */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'store') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600"></div>
 
-              {/* Header */}
-              <div className="flex items-center justify-between flex-wrap gap-4 mb-8 border-b border-slate-100 pb-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                    <Database size={28} />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-black text-slate-900">النسخ الاحتياطي واستعادة البيانات</h3>
-                    <p className="text-slate-400 font-bold text-xs mt-1">
-                      تصدير وتنزيل كافة بيانات المغسلة (الطلبات، المخزون، الأصناف، الاشتراكات) أو استرجاعها بملف واحد
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Backup Actions Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Export Card */}
-                <div className="p-6 rounded-3xl bg-slate-50 border border-slate-200/80 flex flex-col justify-between space-y-6 hover:border-emerald-300 transition-all">
-                  <div className="space-y-4">
-                    <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
-                      <Download size={22} />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                      <Building size={24} />
                     </div>
                     <div>
-                      <h4 className="text-lg font-black text-slate-900">تصدير نسخة احتياطية (Export Backup)</h4>
-                      <p className="text-xs text-slate-500 font-bold mt-1 leading-relaxed">
-                        قم بتنزيل ملف JSON شامل يحتوي على كامل بيانات المغسلة لحفظها أماناً على جهازك.
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-black text-slate-900">هوية واسم المغسلة التجارية</h3>
+                        <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[11px] font-black rounded-full border border-indigo-100 flex items-center gap-1">
+                          <Sparkles size={11} /> تظهر في الفواتير والواتساب
+                        </span>
+                      </div>
+                      <p className="text-slate-400 font-bold text-xs mt-1 leading-relaxed">
+                        تعديل الاسم التجاري الظاهر للمغسلة مع الحفاظ التام على معرف المغسلة الرقمي دون التأثير على الطلبات السابقة
                       </p>
                     </div>
+                  </div>
 
-                    <div className="bg-white p-4 rounded-2xl border border-slate-200/80 text-xs font-bold text-slate-600 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">سجلات الطلبات والفواتير:</span>
-                        <span className="font-black text-indigo-900 px-2.5 py-0.5 bg-indigo-50 rounded-lg">{orders.length} طلب</span>
+                  <div className="flex items-center gap-2 bg-slate-50 px-3.5 py-2 rounded-2xl border border-slate-200/80 self-start sm:self-auto shrink-0">
+                    <Lock size={14} className="text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="text-[10px] font-black text-slate-400 block leading-tight">معرف المغسلة الثابت (Store ID)</span>
+                      <span className="text-xs font-mono font-black text-slate-700 dir-ltr inline-block">
+                        {userProfile?.laundry_id || 'غير محدد'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Success Notification Banner */}
+                {storeNameSuccessMsg && (
+                  <div className="mb-5 p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 text-xs font-bold flex items-center gap-2.5 animate-in fade-in duration-200">
+                    <Check size={16} className="text-emerald-600 shrink-0" />
+                    <span>{storeNameSuccessMsg}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveStoreName} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-2">
+                      الاسم التجاري للمغسلة <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <Building className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <input
+                        placeholder="اسم مغسلتك التجارية (مثال: مغسلة لمسة نظافة)"
+                        className="w-full pr-11 pl-4 py-3.5 sm:py-4 bg-slate-50/80 border border-slate-200/80 rounded-2xl outline-none font-bold focus:bg-white focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all text-sm"
+                        required
+                        type="text"
+                        value={storeNameSettingsInput}
+                        onChange={(e) => setStoreNameSettingsInput(e.target.value)}
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-bold mt-1.5 leading-relaxed">
+                      هذا الاسم هو ما يظهر في ترويسة الفواتير المطبوعة (A4 والفواتير الحرارية) ونصوص رسائل الواتساب الصامتة المرسلة للعملاء.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-end pt-2">
+                    <button
+                      type="submit"
+                      disabled={isSavingStoreName || !storeNameSettingsInput.trim()}
+                      className="w-full sm:w-auto px-7 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-50 text-white rounded-2xl font-black text-xs shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {isSavingStoreName ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          <span>جاري حفظ الاسم...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save size={16} />
+                          <span>حفظ اسم المغسلة الجديد</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* 2. Background WhatsApp Card */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'whatsapp') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                      <MessageCircle size={24} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-black text-slate-900">الربط مع الواتساب الصامت</h3>
+                        <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 text-[11px] font-black rounded-full border border-emerald-100 flex items-center gap-1">
+                          <Sparkles size={11} /> مجاني 100% وبدون وسيط
+                        </span>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">عناصر المخزون:</span>
-                        <span className="font-black text-indigo-900 px-2.5 py-0.5 bg-indigo-50 rounded-lg">{inventory.length} مادة</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">اشتراكات العملاء:</span>
-                        <span className="font-black text-indigo-900 px-2.5 py-0.5 bg-indigo-50 rounded-lg">{subscriptions.length} اشتراك</span>
-                      </div>
+                      <p className="text-slate-400 font-bold text-xs mt-1 leading-relaxed">
+                        إرسال صامت وتلقائي للرسائل والفواتير PDF إلى واتساب العميل فور حفظ الطلب أو تغييره إلى جاهز
+                      </p>
                     </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={handleExportBackup}
-                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-emerald-200/60 active:scale-95 transition-all flex items-center justify-center gap-2"
+                    onClick={() => setShowWhatsAppBotModal(true)}
+                    className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
                   >
-                    <Download size={18} />
-                    <span>تنزيل النسخة الاحتياطية الآن (.JSON)</span>
+                    <QrCode size={16} />
+                    <span>{whatsAppBotStatus.isConnected ? 'إدارة الاتصال بالواتساب' : 'ربط جوال المغسلة (مسح QR)'}</span>
                   </button>
                 </div>
 
-                {/* Import Card */}
-                <div className="p-6 rounded-3xl bg-slate-50 border border-slate-200/80 flex flex-col justify-between space-y-6 hover:border-indigo-300 transition-all">
-                  <div className="space-y-4">
-                    <div className="w-12 h-12 bg-indigo-100 text-indigo-700 rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
-                      <Upload size={22} />
+                {/* Status & Options Overview */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-5">
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">حالة الارتباط</span>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black ${
+                        whatsAppBotStatus.isConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        <span className={`w-2 h-2 rounded-full ${whatsAppBotStatus.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                        {whatsAppBotStatus.isConnected ? 'متصل بنشاط ✅' : 'غير مرتبط (امسح QR) ⚠️'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">رقم الجوال المرتبط</span>
+                    <div className="mt-2">
+                      <span className="text-sm sm:text-base font-black text-slate-800 dir-ltr inline-block">
+                        {whatsAppBotStatus.userPhone || 'لم يتم ربط رقم بعد'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">الإرسال التلقائي في كاشير جديد</span>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-xs font-black text-indigo-900">
+                        {whatsAppBotAutoSend ? 'مفعل تلقائياً 🚀' : 'معطل'}
+                      </span>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={whatsAppBotAutoSend}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setWhatsAppBotAutoSend(val);
+                            localStorage.setItem('laundry_whatsapp_bot_auto_send', val ? 'true' : 'false');
+                            (async () => {
+                              try {
+                                await supabase.from('settings').upsert({
+                                  key: 'laundry_whatsapp_bot_auto_send',
+                                  value: { enabled: val },
+                                  updated_at: new Date().toISOString()
+                                }, { onConflict: 'key' });
+                              } catch (e) {}
+                            })();
+                          }}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* WhatsApp Info Banner */}
+                <div className="p-3.5 bg-emerald-50/60 border border-emerald-100 rounded-2xl flex items-start gap-3">
+                  <ShieldCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                  <p className="text-xs text-emerald-900 leading-relaxed font-bold">
+                    <span className="font-black">كيف يعمل الإرسال الصامت؟</span> عند ربط جوال المغسلة بمسح رمز QR مرة واحدة، يتم إرسال نص الفاتورة الرسمية ورابط الـ PDF مباشرة لواتساب العميل بدون فتح أي شاشة خارجية، وبشكل مجاني 100%.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* 3. USB Thermal Printer Card */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'printer') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                      <Printer size={24} />
                     </div>
                     <div>
-                      <h4 className="text-lg font-black text-slate-900">استعادة نسخة احتياطية (Import / Restore)</h4>
-                      <p className="text-xs text-slate-500 font-bold mt-1 leading-relaxed">
-                        اختر ملف النسخة الاحتياطية (.json) الذي قمت بتنزيله سابقاً لاسترجاع بياناتك وتطبيقها فوراً في النظام.
-                      </p>
-                    </div>
-
-                    {importSuccess && (
-                      <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-900 flex items-center justify-between gap-3 animate-fadeIn">
-                        <div className="flex items-center gap-2.5">
-                          <CheckCircle size={20} className="text-emerald-600 shrink-0" />
-                          <p className="whitespace-pre-line leading-relaxed">{importSuccess}</p>
-                        </div>
-                        <button onClick={() => setImportSuccess(null)} className="text-emerald-600 hover:text-emerald-800 p-1">
-                          <X size={16} />
-                        </button>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-black text-slate-900">طابعة الفواتير الحرارية (USB POS)</h3>
+                        <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[11px] font-black rounded-full border border-indigo-100 flex items-center gap-1">
+                          <Sparkles size={11} /> مقاس 80mm / 58mm
+                        </span>
                       </div>
-                    )}
-
-                    {importError && (
-                      <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs font-bold text-rose-900 flex items-center justify-between gap-3 animate-fadeIn">
-                        <div className="flex items-center gap-2.5">
-                          <AlertTriangle size={20} className="text-rose-600 shrink-0" />
-                          <p className="leading-relaxed">{importError}</p>
-                        </div>
-                        <button onClick={() => setImportError(null)} className="text-rose-600 hover:text-rose-800 p-1">
-                          <X size={16} />
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="p-4 bg-amber-50 border border-amber-200/80 rounded-2xl text-xs font-bold text-amber-900 flex items-start gap-2.5">
-                      <ShieldAlert size={18} className="shrink-0 text-amber-600 mt-0.5" />
-                      <p className="leading-relaxed">
-                        تنبيه هام: سيقوم النظام باستبدال وتحديث البيانات الحالية بالبيانات الموجودة داخل الملف المستورد. يُفضل تنزيل نسخة احتياطية حالية قبل الاستيراد.
+                      <p className="text-slate-400 font-bold text-xs mt-1 leading-relaxed">
+                        الطباعة المباشرة للفواتير عبر طابعات الإيصالات الحرارية المتصلة بالـ USB
                       </p>
                     </div>
                   </div>
 
-                  <div>
-                    <label className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-2xl shadow-lg shadow-indigo-200/60 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer">
-                      <Upload size={18} />
-                      <span>اختيار ملف واسترجاع البيانات</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (orders.length > 0) {
+                        setShowPrintModal(orders[0]);
+                        setTimeout(() => window.print(), 350);
+                      } else {
+                        window.print();
+                      }
+                    }}
+                    className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  >
+                    <Printer size={16} />
+                    <span>طباعة تجريبية الآن</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-5">
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] font-black text-slate-400 block uppercase">الطباعة التلقائية عند الحفظ</span>
+                      <span className="text-xs sm:text-sm font-black text-slate-800 mt-1 block">
+                        {autoPrintThermalOnSave ? 'مفعلة تلقائياً فور الحفظ ✅' : 'معطلة (طباعة يدوية)'}
+                      </span>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
                       <input
-                        ref={backupFileInputRef}
-                        type="file"
-                        accept=".json,application/json,text/json,text/plain,*"
-                        onChange={handleImportBackup}
-                        className="hidden"
+                        type="checkbox"
+                        checked={autoPrintThermalOnSave}
+                        onChange={(e) => {
+                          setAutoPrintThermalOnSave(e.target.checked);
+                          localStorage.setItem('laundry_auto_print_thermal', e.target.checked ? 'true' : 'false');
+                        }}
+                        className="sr-only peer"
                       />
+                      <div className="w-10 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                     </label>
+                  </div>
+
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] font-black text-slate-400 block uppercase">نوع الورق المدعوم</span>
+                      <span className="text-xs sm:text-sm font-black text-slate-800 mt-1 block">رول حراري 80mm و 58mm قياسي</span>
+                    </div>
+                    <span className="px-2.5 py-1 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-700">
+                      POS Roll
+                    </span>
+                  </div>
+                </div>
+
+                {/* QR & Barcode Scanner Integration */}
+                <div className="p-4 sm:p-5 bg-gradient-to-r from-emerald-50/90 to-teal-50/90 rounded-2xl border border-emerald-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-start sm:items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center shadow-xs shrink-0">
+                      <QrCode size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs sm:text-sm font-black text-emerald-950">المسح المباشر بقارئ الباركود (Hardware Scanner)</h4>
+                        <span className="px-2 py-0.5 bg-emerald-200/60 text-emerald-900 text-[10px] font-black rounded-full">
+                          نشط تلقائياً ⚡
+                        </span>
+                      </div>
+                      <p className="text-emerald-800 text-[11px] sm:text-xs font-bold mt-1 leading-relaxed">
+                        عند مسح رمز الـ QR أو الباركود لأي فاتورة، يقوم النظام فوراً بتحويل الطلب إلى (جاهز للاستلام) وإشعار العميل بالواتساب.
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="px-3 py-1.5 bg-white text-emerald-700 text-xs font-black rounded-xl border border-emerald-200 flex items-center gap-1.5 shadow-2xs self-start sm:self-auto shrink-0">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    جاهز للمسح المباشر
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* 4. Laundry Subscription Card */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'subscription') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                      <CreditCard size={24} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-black text-slate-900">إدارة اشتراك مغسلتك</h3>
+                        <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 text-[11px] font-black rounded-full border border-emerald-100 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          نظام مفعل
+                        </span>
+                      </div>
+                      <p className="text-slate-400 font-bold text-xs mt-1 leading-relaxed">متابعة باقة المغسلة وتجديد الاشتراك في المنصة</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowSaaSPaymentModal(true)}
+                    className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-2xl font-black text-xs shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 shrink-0"
+                  >
+                    <Sparkles size={16} />
+                    <span>تجديد اشتراك المغسلة</span>
+                  </button>
+                </div>
+
+                {/* Status Overview Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">الباقة النشطة</span>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-base font-black text-slate-800">
+                        {userProfile?.saas_plan === 'basic' ? 'الباقة الأساسية' :
+                         userProfile?.saas_plan === 'gold' ? 'الباقة الذهبية' :
+                         userProfile?.saas_plan === 'silver' ? 'الباقة الفضية' :
+                         userProfile?.saas_plan === 'platinum' ? 'الباقة البلاتينية' : 'الباقة التجريبية'}
+                      </span>
+                      <span>
+                        {userProfile?.saas_plan === 'basic' ? '🌟' :
+                         userProfile?.saas_plan === 'gold' ? '👑' :
+                         userProfile?.saas_plan === 'silver' ? '🥈' :
+                         userProfile?.saas_plan === 'platinum' ? '💎' : '⏳'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">حالة الباقة</span>
+                    <div className="mt-2">
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black ${
+                        userProfile?.saas_status === 'active' ? 'bg-emerald-100 text-emerald-800' :
+                        userProfile?.saas_status === 'trial' ? 'bg-amber-100 text-amber-800' :
+                        'bg-red-100 text-red-800'
+                      }`}>
+                        {userProfile?.saas_status === 'active' ? 'نشط ✅' :
+                         userProfile?.saas_status === 'trial' ? 'فترة تجريبية ⏳' : 'منتهي الصلاحية ⚠️'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col justify-between">
+                    <span className="text-[11px] font-black text-slate-400 uppercase">تاريخ التجديد القادم</span>
+                    <p className="text-xs sm:text-sm font-black text-indigo-900 mt-2 truncate">
+                      {userProfile?.saas_expiry && !isNaN(new Date(userProfile.saas_expiry).getTime()) ? new Date(userProfile.saas_expiry).toLocaleDateString('ar-SA', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      }) : 'مستمر (غير محدود)'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Subscription Plans Available */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                    <h4 className="text-base font-black text-slate-900 flex items-center gap-2">
+                      <Zap size={18} className="text-amber-500" /> باقات منصة غسيل كلاود المتاحة
+                    </h4>
+                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                      الأسعار لا تشمل ضريبة القيمة المضافة
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                    {/* Basic Plan Card */}
+                    <div className={`p-5 rounded-2xl border-2 transition-all flex flex-col justify-between ${
+                      userProfile?.saas_plan === 'basic' ? 'bg-indigo-50/80 border-indigo-500 shadow-sm ring-2 ring-indigo-200' : 'bg-slate-50/70 border-slate-200/80'
+                    }`}>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="px-3 py-1 bg-indigo-100 text-indigo-700 font-black text-xs rounded-full inline-flex items-center gap-1.5">
+                            🌟 الباقة الأساسية
+                          </span>
+                          {userProfile?.saas_plan === 'basic' && (
+                            <span className="px-2.5 py-0.5 bg-emerald-500 text-white font-black text-[10px] rounded-full shadow-2xs">
+                              باقتك الحالية ✅
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 font-bold">الخيار الأمثل للبدء وإدارة المغسلة اليومية.</p>
+
+                        <div className="p-3 bg-white rounded-xl border border-slate-100 text-right space-y-0.5">
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-xl font-black text-slate-900">105</span>
+                            <span className="text-xs font-bold text-slate-500">ريال / شهرياً</span>
+                          </div>
+                          <p className="text-[11px] font-bold text-slate-600">
+                            الاشتراك السنوي: <span className="font-black text-indigo-900">1,050 ريال / سنوياً</span>
+                          </p>
+                          <p className="text-[10px] font-black text-emerald-600 pt-0.5">
+                            🎁 (وفر 17% — احصل على شهرين مجاناً!)
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="pt-4">
+                        <button
+                          onClick={() => setShowSaaSPaymentModal(true)}
+                          className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-xs transition-all active:scale-95"
+                        >
+                          {userProfile?.saas_plan === 'basic' ? 'تجديد الباقة الأساسية' : 'الاشتراك في الباقة الأساسية'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Gold Plan Card */}
+                    <div className={`p-5 rounded-2xl border-2 transition-all flex flex-col justify-between ${
+                      userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic') ? 'bg-amber-50/80 border-amber-400 shadow-sm ring-2 ring-amber-200' : 'bg-slate-50/70 border-slate-200/80'
+                    }`}>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="px-3 py-1 bg-amber-100 text-amber-800 font-black text-xs rounded-full inline-flex items-center gap-1.5">
+                            👑 الباقة الذهبية
+                          </span>
+                          {(userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic')) && (
+                            <span className="px-2.5 py-0.5 bg-amber-500 text-white font-black text-[10px] rounded-full shadow-2xs">
+                              باقتك الحالية ✅
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-amber-900/80 font-bold">للتجربة المكتملة والمميزات الإضافية اللامحدودة.</p>
+
+                        <div className="p-3 bg-white rounded-xl border border-amber-200/60 text-right space-y-0.5">
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-xl font-black text-amber-950">150</span>
+                            <span className="text-xs font-bold text-amber-800">ريال / شهرياً</span>
+                          </div>
+                          <p className="text-[11px] font-bold text-amber-900">
+                            الاشتراك السنوي: <span className="font-black text-amber-950">1,550 ريال / سنوياً</span>
+                          </p>
+                          <p className="text-[10px] font-black text-amber-700 pt-0.5">
+                            🎁 (وفر 14% — أكثر من شهر ونصف مجاناً!)
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="pt-4">
+                        <button
+                          onClick={() => setShowSaaSPaymentModal(true)}
+                          className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-indigo-950 font-black text-xs rounded-xl shadow-xs transition-all active:scale-95"
+                        >
+                          {(userProfile?.saas_plan === 'gold' || (!userProfile?.saas_plan && userProfile?.saas_plan !== 'basic')) ? 'تجديد الباقة الذهبية 👑' : 'الترقية للباقة الذهبية 👑'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
 
+            {/* 5. Offline Mode Configuration Card */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'offline') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5 border-b border-slate-100 pb-5">
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                      <CloudOff size={24} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg sm:text-xl font-black text-slate-900">وضع العمل بدون إنترنت (الأوفلاين)</h3>
+                        <span className={`px-2.5 py-0.5 text-[11px] font-black rounded-full border flex items-center gap-1.5 ${
+                          isManualOffline()
+                            ? 'bg-amber-100 text-amber-900 border-amber-300'
+                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${isManualOffline() ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`}></span>
+                          {isManualOffline() ? 'أوفلاين مفعل حالياً' : 'متصل أونلاين'}
+                        </span>
+                      </div>
+                      <p className="text-slate-400 font-bold text-xs mt-1 leading-relaxed">
+                        التحكم بذاكرة التخزين المحلي، وحفظ الطلبات للعمل عند انقطاع الإنترنت
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsOfflineModalOpen(true)}
+                    className="w-full sm:w-auto px-6 py-3 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white rounded-2xl font-black text-xs shadow-md shadow-amber-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  >
+                    <CloudOff size={16} />
+                    <span>إعدادات وحفظ الأوفلاين</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-bold">
+                  <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block text-[11px]">حالة الأوفلاين</span>
+                    <span className={`text-xs sm:text-sm font-black ${isManualOffline() ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {isManualOffline() ? '🟡 وضع أوفلاين يدوي' : '🟢 متصل بالإنترنت'}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block text-[11px]">حد الحفظ المختار</span>
+                    <span className="text-xs sm:text-sm font-black text-indigo-900">
+                      {getOfflineCacheLimit() === 'all' ? 'جميع الطلبات' : `آخر ${getOfflineCacheLimit()} طلب`}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 space-y-1">
+                    <span className="text-slate-400 block text-[11px]">الطلبات المخزنة محلياً</span>
+                    <span className="text-xs sm:text-sm font-black text-slate-800">
+                      {(() => {
+                        try {
+                          const local = localStorage.getItem(`laundry_orders_${userProfile?.laundry_id}`) || localStorage.getItem('laundry_orders');
+                          if (local) {
+                            const parsed = JSON.parse(local);
+                            return Array.isArray(parsed) ? `${parsed.length} طلب محفوظ` : 'لا يوجد';
+                          }
+                        } catch (e) {}
+                        return 'لا يوجد بيانات';
+                      })()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 6. Data Backup & Restore Section */}
+            {(settingsSubTab === 'all' || settingsSubTab === 'backup') && (
+              <div className="bg-white rounded-3xl p-5 sm:p-7 md:p-8 shadow-sm border border-slate-200/80 overflow-hidden relative transition-all">
+                <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600"></div>
+
+                <div className="flex items-center gap-3.5 mb-6 border-b border-slate-100 pb-5">
+                  <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shadow-xs shrink-0">
+                    <Database size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg sm:text-xl font-black text-slate-900">النسخ الاحتياطي واستعادة البيانات</h3>
+                    <p className="text-slate-400 font-bold text-xs mt-0.5 leading-relaxed">
+                      تصدير كافة بيانات المغسلة أو استرجاعها بملف واحد
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  {/* Export Card */}
+                  <div className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80 flex flex-col justify-between space-y-4 hover:border-emerald-300 transition-all">
+                    <div className="space-y-3">
+                      <div className="w-10 h-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center shrink-0 shadow-2xs">
+                        <Download size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-black text-slate-900">تصدير نسخة احتياطية (Export)</h4>
+                        <p className="text-xs text-slate-500 font-bold mt-0.5 leading-relaxed">
+                          قم بتنزيل ملف JSON شامل يحتوي على كامل بيانات المغسلة لحفظها أماناً على جهازك.
+                        </p>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 text-xs font-bold text-slate-600 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">سجلات الطلبات والفواتير:</span>
+                          <span className="font-black text-indigo-900 px-2 py-0.5 bg-indigo-50 rounded-md">{orders.length} طلب</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">عناصر المخزون:</span>
+                          <span className="font-black text-indigo-900 px-2 py-0.5 bg-indigo-50 rounded-md">{inventory.length} مادة</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">اشتراكات العملاء:</span>
+                          <span className="font-black text-indigo-900 px-2 py-0.5 bg-indigo-50 rounded-md">{subscriptions.length} اشتراك</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleExportBackup}
+                      className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md shadow-emerald-600/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Download size={16} />
+                      <span>تنزيل النسخة الاحتياطية (.JSON)</span>
+                    </button>
+                  </div>
+
+                  {/* Import Card */}
+                  <div className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80 flex flex-col justify-between space-y-4 hover:border-indigo-300 transition-all">
+                    <div className="space-y-3">
+                      <div className="w-10 h-10 bg-indigo-100 text-indigo-700 rounded-xl flex items-center justify-center shrink-0 shadow-2xs">
+                        <Upload size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-black text-slate-900">استعادة نسخة احتياطية (Restore)</h4>
+                        <p className="text-xs text-slate-500 font-bold mt-0.5 leading-relaxed">
+                          اختر ملف النسخة الاحتياطية (.json) الذي قمت بتنزيله سابقاً لاسترجاع بياناتك وتطبيقها فوراً.
+                        </p>
+                      </div>
+
+                      {importSuccess && (
+                        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-900 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+                            <p className="whitespace-pre-line leading-relaxed">{importSuccess}</p>
+                          </div>
+                          <button onClick={() => setImportSuccess(null)} className="text-emerald-600 hover:text-emerald-800 p-1">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+
+                      {importError && (
+                        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-900 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+                            <p className="leading-relaxed">{importError}</p>
+                          </div>
+                          <button onClick={() => setImportError(null)} className="text-rose-600 hover:text-rose-800 p-1">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-[11px] font-bold text-amber-900 flex items-start gap-2">
+                        <ShieldAlert size={16} className="shrink-0 text-amber-600 mt-0.5" />
+                        <p className="leading-relaxed">
+                          تنبيه: سيقوم النظام باستبدال البيانات الحالية بالبيانات الموجودة في الملف المستورد.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md shadow-indigo-600/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer">
+                        <Upload size={16} />
+                        <span>اختيار ملف واسترجاع البيانات</span>
+                        <input
+                          ref={backupFileInputRef}
+                          type="file"
+                          accept=".json,application/json,text/json,text/plain,*"
+                          onChange={handleImportBackup}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

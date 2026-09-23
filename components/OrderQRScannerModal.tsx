@@ -652,7 +652,6 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       }
 
       // Order Found! Trigger success visual feedback, beep and vibration
-      setScanSuccessPulse(true);
       playBeep();
       if (navigator.vibrate) {
         try { navigator.vibrate([100, 50, 100]); } catch (e) {}
@@ -668,15 +667,14 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       setLastDecodedDebug(successItem);
       setDebugLogs(prev => [successItem, ...prev.filter(l => l.id !== debugId).slice(0, 14)]);
 
-      // Update Order Status to 'Ready' (جاهز للاستلام) with skipNotification: true
-      await onOrderUpdated(order.id, 'Ready', { skipNotification: true });
+      // Prepare updated order object immediately
       const updatedOrder: Order = { ...order, status: 'Ready' };
 
-      // Transition smoothly to result card after a brief visual confirmation pulse
-      setTimeout(() => {
-        setProcessedOrder(updatedOrder);
-        setScanSuccessPulse(false);
-      }, 500);
+      // Immediately stop camera and transition instantly to result popup (eliminates 1-2s delay / blank screen)
+      stopCamera();
+      setIsProcessing(false);
+      setScanSuccessPulse(false);
+      setProcessedOrder(updatedOrder);
 
       // Construct ready notification message
       const smartMessage = `مرحباً ${order.customer_name}، يسعدنا إبلاغك بأن طلبك رقم #${order.order_number} في ${laundryName || 'مغسلة عود ونظافة'} قد تم الانتهاء منه بالكامل وهو جاهز للاستلام الآن! 🧺✨\n\n📦 رقم الفاتورة: #${order.order_number}\n💰 المبلغ الإجمالي: ${order.total.toFixed(2)} ر.س\n📍 حالة السداد: ${order.is_paid ? 'مسددة بالكامل ✅' : 'المبلغ مستحق عند الاستلام ⏳'}\n\nنرجو التفضل بزيارتنا لاستلامه. نسعد دائماً بخدمتكم! 🌟`;
@@ -696,38 +694,51 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       finalPhone = finalPhone.replace(/^0+/, '');
       const waUrl = `https://wa.me/${finalPhone}?text=${encodeURIComponent(smartMessage)}`;
 
-      // Send single notification automatically via WhatsApp Bot / Twilio
-      let notifiedViaBot = false;
-      let botErrorMsg = '';
-      if (onSendWhatsAppNotification) {
-        try {
-          const res = await onSendWhatsAppNotification(updatedOrder);
-          if (res && res.success) {
-            notifiedViaBot = true;
-          } else if (res && res.error) {
-            botErrorMsg = res.error;
-          }
-        } catch (botErr: any) {
-          console.warn("Automated notification callback error:", botErr);
-          botErrorMsg = botErr?.message || '';
-        }
-      }
+      // Show initial sending status
+      setNotificationStatus({
+        sent: false,
+        channel: 'silent_bot',
+        message: 'جاري إرسال إشعار الواتساب التلقائي للعميل... ⏳',
+        waUrl
+      });
 
-      if (notifiedViaBot) {
-        setNotificationStatus({
-          sent: true,
-          channel: 'silent_bot',
-          message: 'تم إرسال إشعار الجاهزية للعميل تلقائياً في الخلفية مع الفاتورة الرسمية! 📲',
-          waUrl
-        });
-      } else {
-        setNotificationStatus({
-          sent: false,
-          channel: 'failed',
-          message: botErrorMsg ? `تنبيه الإشعار: ${botErrorMsg}` : 'بوت الواتساب غير متصل حالياً لإرسال الرسالة التلقائية.',
-          waUrl
-        });
-      }
+      // Update Order Status in database and send automated WhatsApp notification asynchronously in background
+      (async () => {
+        try {
+          await onOrderUpdated(order.id, 'Ready', { skipNotification: true });
+        } catch (updateErr) {
+          console.warn("Background order status update error:", updateErr);
+        }
+
+        if (onSendWhatsAppNotification) {
+          try {
+            const res = await onSendWhatsAppNotification(updatedOrder);
+            if (res && res.success) {
+              setNotificationStatus({
+                sent: true,
+                channel: 'silent_bot',
+                message: 'تم إرسال إشعار الجاهزية للعميل تلقائياً في الخلفية مع الفاتورة الرسمية! 📲',
+                waUrl
+              });
+            } else {
+              setNotificationStatus({
+                sent: false,
+                channel: 'failed',
+                message: res?.error ? `تنبيه الإشعار: ${res.error}` : 'بوت الواتساب غير متصل حالياً لإرسال الرسالة التلقائية.',
+                waUrl
+              });
+            }
+          } catch (botErr: any) {
+            console.warn("Automated notification callback error:", botErr);
+            setNotificationStatus({
+              sent: false,
+              channel: 'failed',
+              message: botErr?.message ? `تنبيه: ${botErr.message}` : 'تعذر إرسال الإشعار التلقائي.',
+              waUrl
+            });
+          }
+        }
+      })();
     } catch (err: any) {
       console.error("Order QR processing error:", err);
       setCameraError(err.message || "حدث خطأ أثناء معالجة الطلب.");
@@ -966,6 +977,18 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     startCamera();
   };
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // Manual code submission
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -976,67 +999,77 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 md:p-6 overflow-y-auto animate-in fade-in duration-200" dir="rtl">
-      <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden my-4 relative">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-violet-800 p-5 md:p-6 text-white flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20 shadow-inner">
-              <div className="relative w-6 h-6 flex items-center justify-center text-white">
-                <Scan size={24} strokeWidth={2.2} />
-                <Barcode size={15} strokeWidth={2.4} className="absolute inset-0 m-auto" />
-              </div>
+    <div 
+      className="fixed inset-0 z-[300] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150"
+      dir="rtl"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div 
+        className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-sm sm:max-w-md max-h-[92dvh] flex flex-col overflow-hidden my-auto relative animate-in zoom-in-95 duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Sticky Header - Always visible with prominent Close button */}
+        <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-violet-800 px-4 py-3 sm:px-5 sm:py-3.5 text-white flex items-center justify-between shrink-0 shadow-sm z-20">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-white/15 backdrop-blur-md flex items-center justify-center border border-white/20 shadow-inner shrink-0">
+              <Scan size={18} strokeWidth={2.4} />
             </div>
             <div>
-              <h3 className="text-lg font-black tracking-tight">مسح QR / باركود الفاتورة</h3>
-              <p className="text-indigo-200 text-xs mt-0.5 font-bold">
-                تحديث الطلب تلقائياً إلى (جاهز للاستلام) وإشعار العميل
+              <h3 className="text-sm sm:text-base font-black tracking-tight leading-tight">مسح QR / باركود الفاتورة</h3>
+              <p className="text-indigo-200 text-[10px] sm:text-xs font-bold leading-tight mt-0.5">
+                تحديث فوري إلى (جاهز للاستلام) ⚡
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
+            className="w-9 h-9 rounded-xl bg-white/15 hover:bg-white/25 active:scale-95 text-white flex items-center justify-center transition-all cursor-pointer shrink-0 border border-white/20 touch-manipulation"
             aria-label="إغلاق"
+            title="إغلاق النافذة"
           >
-            <X size={20} />
+            <X size={18} strokeWidth={2.5} />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-6 md:p-8 space-y-6">
+        {/* Scrollable Modal Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           {/* Result State (when order is scanned and updated) */}
           {processedOrder ? (
-            <div className="text-center space-y-6 animate-in zoom-in-95 duration-200">
+            <div className="text-center space-y-4 animate-in zoom-in-95 duration-200">
               {/* Success Badge */}
-              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-100 animate-bounce">
-                <CheckCircle2 size={44} />
+              <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-md shadow-emerald-100">
+                <CheckCircle2 size={32} />
               </div>
 
               <div>
-                <span className="px-3.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-black rounded-full inline-block mb-2">
-                  تم التحديث بنجاح إلى: جاهز للاستلام ✅
+                <span className="px-3 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-black rounded-full inline-block mb-1.5">
+                  تم التحديث بنجاح: جاهز للاستلام ✅
                 </span>
-                <h4 className="text-2xl font-black text-slate-900 mb-1">
+                <h4 className="text-xl font-black text-slate-900">
                   طلب #{processedOrder.order_number}
                 </h4>
-                <p className="text-sm font-bold text-slate-500">
+                <p className="text-xs font-bold text-slate-500 mt-0.5">
                   العميل: <span className="text-slate-900 font-black">{processedOrder.customer_name}</span>
                 </p>
               </div>
 
               {/* Order Info Summary Card */}
-              <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 text-right space-y-3">
-                <div className="flex justify-between items-center text-xs font-bold border-b border-slate-200 pb-2.5">
-                  <span className="text-slate-400">رقم الجوال:</span>
+              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-right space-y-2 text-xs">
+                <div className="flex justify-between items-center font-bold border-b border-slate-200/80 pb-2">
+                  <span className="text-slate-400 text-[11px]">رقم الجوال:</span>
                   <span className="text-slate-800 font-mono font-black" dir="ltr">{processedOrder.customer_phone || '-'}</span>
                 </div>
-                <div className="flex justify-between items-center text-xs font-bold border-b border-slate-200 pb-2.5">
-                  <span className="text-slate-400">المبلغ الإجمالي:</span>
-                  <span className="text-indigo-600 font-black text-sm">{processedOrder.total.toFixed(2)} ر.س</span>
+                <div className="flex justify-between items-center font-bold border-b border-slate-200/80 pb-2">
+                  <span className="text-slate-400 text-[11px]">المبلغ الإجمالي:</span>
+                  <span className="text-indigo-600 font-black text-xs sm:text-sm">{processedOrder.total.toFixed(2)} ر.س</span>
                 </div>
-                <div className="flex justify-between items-center text-xs font-bold">
-                  <span className="text-slate-400">حالة السداد:</span>
+                <div className="flex justify-between items-center font-bold">
+                  <span className="text-slate-400 text-[11px]">حالة السداد:</span>
                   <span className={`font-black ${processedOrder.is_paid ? 'text-emerald-600' : 'text-amber-600'}`}>
                     {processedOrder.is_paid ? 'مدفوعة بالكامل ✅' : 'معلقة / غير مسددة ⏳'}
                   </span>
@@ -1046,40 +1079,40 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               {/* WhatsApp Notification Status Card */}
               {notificationStatus && (
                 <div
-                  className={`p-4 rounded-2xl border text-right space-y-2.5 animate-in fade-in duration-200 ${
+                  className={`p-3 rounded-2xl border text-right space-y-2 animate-in fade-in duration-200 ${
                     notificationStatus.sent
                       ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                       : 'bg-amber-50 border-amber-200 text-amber-900'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2.5">
                     <div
-                      className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
                         notificationStatus.sent ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'
                       }`}
                     >
-                      <Send size={16} />
+                      <Send size={14} />
                     </div>
                     <div className="flex-1">
-                      <p className="text-xs font-black leading-relaxed">
+                      <p className="text-[11px] font-black leading-snug">
                         {notificationStatus.message}
                       </p>
                     </div>
                   </div>
 
                   {!notificationStatus.sent && notificationStatus.waUrl && (
-                    <div className="pt-2 border-t border-amber-200/60 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-amber-800">
-                        يمكنك إرسال الإشعار للعميل يدوياً بنقرة واحدة:
+                    <div className="pt-1.5 border-t border-amber-200/60 flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold text-amber-800">
+                        إرسال الإشعار يدوياً:
                       </span>
                       <a
                         href={notificationStatus.waUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition-colors shrink-0"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-black shadow-xs transition-colors shrink-0"
                       >
-                        <MessageSquare size={13} />
-                        إرسال عبر واتساب 💬
+                        <MessageSquare size={12} />
+                        إرسال واتساب 💬
                       </a>
                     </div>
                   )}
@@ -1087,19 +1120,19 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               )}
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <button
                   type="button"
                   onClick={handleScanAnother}
-                  className="p-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black text-xs shadow-lg shadow-indigo-100 flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+                  className="py-3 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-xs shadow-md shadow-indigo-100 flex items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer"
                 >
-                  <Camera size={16} />
+                  <Camera size={15} />
                   مسح طلب آخر
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
-                  className="p-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-black text-xs active:scale-95 transition-all cursor-pointer"
+                  className="py-3 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-black text-xs active:scale-95 transition-all cursor-pointer"
                 >
                   تم الانتهاء
                 </button>
@@ -1107,21 +1140,21 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
             </div>
           ) : (
             /* Active Camera Scanner View */
-            <div className="space-y-4">
+            <div className="space-y-3.5">
               {/* Hardware & Camera Dual Mode Badge */}
-              <div className="flex items-center justify-between p-3 bg-indigo-50/80 border border-indigo-100 rounded-2xl text-xs font-bold text-indigo-950">
+              <div className="flex items-center justify-between p-2.5 bg-indigo-50/80 border border-indigo-100 rounded-xl text-xs font-bold text-indigo-950">
                 <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <span>قارئ الباركود الحراري والكاميرا متصلان وجاهزان للمسح</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span className="text-[11px] text-slate-700 font-bold">الماسح الضوئي والكاميرا جاهزان</span>
                 </div>
-                <span className="text-[10px] font-black bg-white text-indigo-800 border border-indigo-200 px-2 py-0.5 rounded-md shadow-xs">
+                <span className="text-[10px] font-black bg-white text-indigo-800 border border-indigo-200 px-2 py-0.5 rounded-md shadow-2xs">
                   مسح فوري ⚡
                 </span>
               </div>
 
-              {/* Camera Preview Container with Pinch-to-Zoom and Tap-to-Focus */}
+              {/* Camera Preview Container with responsive height */}
               <div 
-                className="relative rounded-3xl overflow-hidden bg-slate-950 aspect-square flex items-center justify-center border-4 border-slate-900 shadow-inner select-none touch-none"
+                className="relative rounded-2xl overflow-hidden bg-slate-950 h-52 sm:h-60 flex items-center justify-center border-2 border-slate-900 shadow-inner select-none touch-none shrink-0"
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
@@ -1148,16 +1181,16 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                 {/* Optical Scanning Overlay */}
                 <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
                   {/* Scanner Target Box with Corner Guides & Success Pulse */}
-                  <div className={`w-64 h-64 border-2 rounded-3xl relative overflow-hidden shadow-2xl backdrop-brightness-110 transition-all duration-300 ${
+                  <div className={`w-40 h-40 sm:w-48 sm:h-48 border-2 rounded-2xl relative overflow-hidden shadow-2xl backdrop-brightness-110 transition-all duration-300 ${
                     scanSuccessPulse 
                       ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_30px_#10b981]' 
                       : 'border-indigo-400/60'
                   }`}>
                     {/* Corner Reticles */}
-                    <div className={`absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 rounded-tr-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
-                    <div className={`absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 rounded-tl-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
-                    <div className={`absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 rounded-br-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
-                    <div className={`absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 rounded-bl-xl transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 rounded-tr-lg transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 rounded-tl-lg transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute bottom-0 right-0 w-5 h-5 border-b-4 border-r-4 rounded-br-lg transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
+                    <div className={`absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 rounded-bl-lg transition-colors ${scanSuccessPulse ? 'border-emerald-400' : 'border-indigo-400'}`} />
 
                     {/* Animated Scanning Laser Line */}
                     {isScanning && !isProcessing && !scanSuccessPulse && (
@@ -1171,37 +1204,37 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                     {/* Center Success Icon Pulse */}
                     {scanSuccessPulse && (
                       <div className="absolute inset-0 flex items-center justify-center animate-in zoom-in-50 duration-200">
-                        <div className="p-4 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-500/40 animate-bounce">
-                          <Check size={36} className="stroke-[3]" />
+                        <div className="p-3 rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-500/40 animate-bounce">
+                          <Check size={28} className="stroke-[3]" />
                         </div>
                       </div>
                     )}
                   </div>
 
                   {/* Guide text */}
-                  <div className="mt-3 flex items-center gap-2">
-                    <span className="px-3.5 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md text-white text-xs font-black shadow-md border border-white/10">
-                      {isProcessing ? 'جاري معالجة الرمز والطلب...' : 'وجه الكاميرا نحو رمز QR أو الباركود'}
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <span className="px-2.5 py-1 rounded-full bg-slate-900/80 backdrop-blur-md text-white text-[10px] sm:text-[11px] font-black shadow-md border border-white/10">
+                      {isProcessing ? 'جاري معالجة الطلب...' : 'وجه الكاميرا نحو رمز QR أو الباركود'}
                     </span>
                   </div>
                 </div>
 
                 {/* Camera Top Controls */}
-                <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-auto">
+                <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto">
                   <div className="flex items-center gap-1.5">
                     {/* Flashlight / Torch toggle button */}
                     {torchSupported && (
                       <button
                         type="button"
                         onClick={toggleTorch}
-                        className={`p-2.5 rounded-xl backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md ${
+                        className={`p-2 rounded-xl backdrop-blur-sm transition-all text-xs flex items-center gap-1 cursor-pointer shadow-md ${
                           torchOn 
                             ? 'bg-amber-500 text-white shadow-amber-500/30 font-black' 
                             : 'bg-slate-900/70 hover:bg-slate-900 text-white'
                         }`}
                         title={torchOn ? 'إطفاء الفلاش' : 'تشغيل الفلاش'}
                       >
-                        <Flashlight size={16} className={torchOn ? 'fill-current' : ''} />
+                        <Flashlight size={14} className={torchOn ? 'fill-current' : ''} />
                       </button>
                     )}
                   </div>
@@ -1209,21 +1242,21 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                   <button
                     type="button"
                     onClick={toggleFacingMode}
-                    className="p-2.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-900/70 hover:bg-slate-900 text-white backdrop-blur-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                     title="تبديل الكاميرا (أمامية / خلفية)"
                   >
-                    <RotateCw size={16} />
-                    <span className="text-[11px] font-bold">تبديل الكاميرا</span>
+                    <RotateCw size={13} />
+                    <span className="text-[10px] font-bold">تبديل الكاميرا</span>
                   </button>
                 </div>
               </div>
 
               {/* Error Banner */}
               {cameraError && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-xs font-bold space-y-2.5 text-right animate-in fade-in duration-200">
-                  <div className="flex items-start gap-2.5">
-                    <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-                    <div className="flex-1 whitespace-pre-line leading-relaxed">
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs font-bold space-y-2 text-right animate-in fade-in duration-200">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1 whitespace-pre-line leading-relaxed text-[11px]">
                       {cameraError}
                     </div>
                   </div>
@@ -1237,7 +1270,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                         setIsScanning(true);
                         startCamera();
                       }}
-                      className="px-3.5 py-2 bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5"
+                      className="px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center gap-1"
                     >
                       <span>متابعة المسح 📸</span>
                     </button>
@@ -1247,32 +1280,43 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
               {/* Manual Input Fallback */}
               <div className="pt-2 border-t border-slate-100">
-                <form onSubmit={handleManualSubmit} className="space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                <form onSubmit={handleManualSubmit} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
                     <span>أو أدخل رقم الفاتورة يدوياً:</span>
-                    <span className="text-[11px] text-slate-400">إذا كانت الكاميرا غير متوفرة</span>
                   </div>
                   <div className="flex gap-2">
                     <div className="relative flex-1">
-                      <QrCode className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <QrCode className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
                       <input
                         type="text"
                         placeholder="مثال: ORD-1001 أو 1001"
                         value={manualInput}
                         onChange={e => setManualInput(e.target.value)}
-                        className="w-full pr-10 pl-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 focus:bg-white text-xs font-bold font-mono transition-all"
+                        className="w-full pr-9 pl-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 focus:bg-white text-xs font-bold font-mono transition-all"
                       />
                     </div>
                     <button
                       type="submit"
                       disabled={!manualInput.trim() || isProcessing}
-                      className="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shrink-0 cursor-pointer"
+                      className="px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center gap-1 transition-all shrink-0 cursor-pointer"
                     >
-                      {isProcessing ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                      {isProcessing ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
                       تجهيز
                     </button>
                   </div>
                 </form>
+              </div>
+
+              {/* Extra Close Button at bottom for easy mobile tap */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation"
+                >
+                  <X size={15} />
+                  <span>إلغاء وإغلاق الماسح</span>
+                </button>
               </div>
             </div>
           )}
