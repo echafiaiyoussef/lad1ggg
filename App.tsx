@@ -928,6 +928,7 @@ const App: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all');
 
   const [showPrintModal, setShowPrintModal] = useState<Order | null>(null);
+  const [invoiceSentNoticeOrderId, setInvoiceSentNoticeOrderId] = useState<string | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
   const [showEditOrderModal, setShowEditOrderModal] = useState<Order | null>(null);
   const [originalOrder, setOriginalOrder] = useState<Order | null>(null);
@@ -5579,26 +5580,41 @@ const App: React.FC = () => {
         setSelectedOrderPackageId('');
         setActiveTab('orders');
         setShowPrintModal(createdOrder);
+        setInvoiceSentNoticeOrderId(createdOrder.id);
 
-        // Auto print with USB Thermal Printer if enabled
-        const isAutoPrintThermal = localStorage.getItem('laundry_auto_print_thermal') !== 'false';
-        if (isAutoPrintThermal) {
-          setTimeout(() => {
-            window.print();
-          }, 350);
-        }
-
-        // Auto msg if online
-        if (isBrowserOnline()) {
-          triggerBackgroundNotification(createdOrder, 'RECEIVED');
-        }
-
-        // Silent background WhatsApp Bot message
+        // 1. Send invoice directly to customer upon creation via WhatsApp Bot (dispatched immediately)
         const currentActId = userProfile?.laundry_id || userProfile?.id || session?.user?.id || 'default';
         const autoSendKey = currentActId === 'default' ? 'laundry_whatsapp_bot_auto_send' : `laundry_whatsapp_bot_auto_send_${currentActId}`;
         const autoSendBot = localStorage.getItem(autoSendKey) !== 'false';
+        let sendPromise: Promise<any> | null = null;
         if (autoSendBot && createdOrder.customer_phone) {
-          sendSilentWhatsAppBotOrderNotification(createdOrder, 'RECEIVED');
+          sendPromise = sendSilentWhatsAppBotOrderNotification(createdOrder, 'RECEIVED');
+        } else if (isBrowserOnline() && twilioConfig.enabled && twilioConfig.accountSid) {
+          // Only trigger Twilio if WhatsApp Bot is not enabled to prevent duplicate messages
+          triggerBackgroundNotification(createdOrder, 'RECEIVED');
+        }
+
+        // 2. Auto print with USB Thermal Printer (ON by default)
+        const isAutoPrintThermal = localStorage.getItem('laundry_auto_print_thermal') !== 'false';
+        if (isAutoPrintThermal) {
+          let hasPrinted = false;
+          const triggerPrint = () => {
+            if (!hasPrinted) {
+              hasPrinted = true;
+              window.print();
+            }
+          };
+
+          if (sendPromise) {
+            // Once the WhatsApp message has been dispatched to the server, open print dialog so it never blocks delivery
+            sendPromise.finally(() => {
+              setTimeout(triggerPrint, 250);
+            });
+            // Safety timeout: don't let print wait longer than 2.2 seconds even on slow connections
+            setTimeout(triggerPrint, 2200);
+          } else {
+            setTimeout(triggerPrint, 400);
+          }
         }
       }
     } catch (e: any) {
@@ -6148,50 +6164,82 @@ const App: React.FC = () => {
     });
   };
 
-  const sendSilentWhatsAppBotOrderNotification = (order: Order, context: MessageContext) => {
-    const dedupKey = `${order.id || order.order_number}_${context}`;
+  const sendSilentWhatsAppBotOrderNotification = async (order: Order, context: MessageContext): Promise<any> => {
+    const dedupKey1 = `${order.id || ''}_${context}`;
+    const dedupKey2 = `${order.order_number || ''}_${context}`;
+    const cleanPhone = (order.customer_phone || '').replace(/\D/g, '');
+    const dedupKey3 = `${cleanPhone}_${order.order_number || ''}_${context}`;
     const now = Date.now();
-    const lastSent = recentSentNotificationsRef.current.get(dedupKey);
-    if (lastSent && (now - lastSent < 45000)) {
-      console.log(`[WhatsApp Notification] Skipping duplicate silent notification for ${dedupKey} (sent ${now - lastSent}ms ago)`);
+
+    const lastSent = recentSentNotificationsRef.current.get(dedupKey1) ||
+                     recentSentNotificationsRef.current.get(dedupKey2) ||
+                     recentSentNotificationsRef.current.get(dedupKey3);
+
+    if (lastSent && (now - lastSent < 120000)) {
+      console.log(`[WhatsApp Notification] Skipping duplicate silent notification for ${dedupKey2} (sent ${now - lastSent}ms ago)`);
       return;
     }
-    recentSentNotificationsRef.current.set(dedupKey, now);
 
-    // Run asynchronously in a detached timer so it never lags or freezes the UI during save
-    setTimeout(async () => {
+    recentSentNotificationsRef.current.set(dedupKey1, now);
+    recentSentNotificationsRef.current.set(dedupKey2, now);
+    recentSentNotificationsRef.current.set(dedupKey3, now);
+
+    try {
+      const smartMsg = await generateSmartReminder(order, context);
+      const fullMessage = `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`;
+
+      const laundryName = userProfile?.laundry_name || 'مغسلة عود ونظافة';
+      let pdfBase64: string | undefined = undefined;
       try {
-        const smartMsg = await generateSmartReminder(order, context);
-        const fullMessage = `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`;
-
-        const laundryName = userProfile?.laundry_name || 'مغسلة عود ونظافة';
-        let pdfBase64: string | undefined = undefined;
-        try {
-          pdfBase64 = await generateInvoicePdfBase64(order, laundryName);
-        } catch (pdfErr) {
-          console.warn("Silent bot PDF generation error:", pdfErr);
-        }
-
-        const accountId = userProfile?.laundry_id || userProfile?.id || session?.user?.id || 'default';
-        const res = await sendWhatsAppBotMessage({
-          accountId,
-          toPhone: order.customer_phone,
-          message: fullMessage,
-          pdfBase64,
-          pdfFileName: `فاتورة-${order.order_number}.pdf`
-        });
-
-        if (!res.success) {
-          console.warn("WhatsApp bot silent send result:", res.error);
-        }
-      } catch (e: any) {
-        console.error("sendSilentWhatsAppBotOrderNotification error:", e);
+        pdfBase64 = await generateInvoicePdfBase64(order, laundryName);
+      } catch (pdfErr) {
+        console.warn("Silent bot PDF generation error:", pdfErr);
       }
-    }, 1000);
+
+      const accountId = userProfile?.laundry_id || userProfile?.id || session?.user?.id || 'default';
+      const res = await sendWhatsAppBotMessage({
+        accountId,
+        toPhone: order.customer_phone,
+        message: fullMessage,
+        pdfBase64,
+        pdfFileName: `فاتورة-${order.order_number}.pdf`
+      });
+
+      if (!res.success) {
+        console.warn("WhatsApp bot silent send result:", res.error);
+      }
+      return res;
+    } catch (e: any) {
+      console.error("sendSilentWhatsAppBotOrderNotification error:", e);
+    }
   };
 
   const sendWhatsAppReminder = async (order: Order, context: MessageContext) => {
     if (sendingMessageIds.has(order.id)) return;
+
+    // Check if recently sent to prevent sending duplicate invoices
+    const dedupKey1 = `${order.id || ''}_${context}`;
+    const dedupKey2 = `${order.order_number || ''}_${context}`;
+    const cleanPhone = (order.customer_phone || '').replace(/\D/g, '');
+    const dedupKey3 = `${cleanPhone}_${order.order_number || ''}_${context}`;
+    const now = Date.now();
+
+    const lastSent = recentSentNotificationsRef.current.get(dedupKey1) ||
+                     recentSentNotificationsRef.current.get(dedupKey2) ||
+                     recentSentNotificationsRef.current.get(dedupKey3);
+
+    if (lastSent && (now - lastSent < 120000)) {
+      const secondsAgo = Math.round((now - lastSent) / 1000);
+      const confirmResend = window.confirm(`تم إرسال هذه الفاتورة للعميل بالفعل قبل ${secondsAgo} ثانية عبر الواتساب.\n\nهل ترغب حقاً بإعادة إرسالها مرة ثانية؟`);
+      if (!confirmResend) {
+        return;
+      }
+    }
+
+    recentSentNotificationsRef.current.set(dedupKey1, now);
+    recentSentNotificationsRef.current.set(dedupKey2, now);
+    recentSentNotificationsRef.current.set(dedupKey3, now);
+
     setSendingMessageIds(prev => new Set(prev).add(order.id));
     
     try {
@@ -6230,6 +6278,7 @@ const App: React.FC = () => {
         });
 
         if (botRes.success) {
+          setInvoiceSentNoticeOrderId(order.id);
           setToastNotification({
             type: 'success',
             message: `تم إرسال الفاتورة والرسالة للعميل (${order.customer_name}) مباشرة مع ملف PDF عبر الواتساب! 🟢`
@@ -6249,6 +6298,7 @@ const App: React.FC = () => {
               title: `فاتورة #${order.order_number}`,
               text: fullMessage
             });
+            setInvoiceSentNoticeOrderId(order.id);
             return;
           } catch (shareErr: any) {
             if (shareErr?.name === 'AbortError') {
@@ -6275,6 +6325,7 @@ const App: React.FC = () => {
         });
       }
 
+      setInvoiceSentNoticeOrderId(order.id);
       window.open(waUrl, '_blank');
     } catch (error) { 
       alert("خطأ في معالجة الرسالة."); 
@@ -7421,10 +7472,6 @@ const App: React.FC = () => {
 
           {/* User Profile & Logout */}
           <div className="mt-auto pt-4 border-t border-slate-100 bg-white shrink-0 space-y-2.5">
-            <div className="hidden xl:block px-1">
-              <PWAInstallButton />
-            </div>
-            
             <div className="hidden xl:flex items-center gap-3 p-2 bg-slate-50 rounded-2xl border border-slate-100 mb-2">
               <div className="w-9 h-9 bg-blue-100 text-blue-700 rounded-xl flex items-center justify-center font-black text-sm shrink-0">
                 {userProfile?.full_name ? userProfile.full_name.charAt(0) : (userProfile?.email?.charAt(0) || 'U')}
@@ -7618,12 +7665,9 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="flex-1">
-                    <PWAInstallButton />
-                  </div>
                   <button 
                     onClick={handleLogout} 
-                    className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-red-600 bg-red-50 hover:bg-red-100 transition-all text-xs font-black"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-red-600 bg-red-50 hover:bg-red-100 transition-all text-xs font-black"
                   >
                     <X size={16} />
                     <span>خروج</span>
@@ -7639,10 +7683,6 @@ const App: React.FC = () => {
         <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
           <div><h2 className="text-2xl font-black text-slate-900">{navItems.find(n => n.id === activeTab)?.label}</h2><p className="text-slate-500 text-sm font-medium">{new Date().toLocaleDateString('ar-SA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p></div>
           <div className="flex items-center gap-4">
-            <div className="hidden sm:block">
-              <PWAInstallButton />
-            </div>
-
             {/* Offline Mode Configuration Button */}
             <button
               type="button"
@@ -8361,7 +8401,7 @@ const App: React.FC = () => {
                             </div>
                           )}
                           <div className="grid grid-cols-4 gap-2">
-                             <button onClick={(e) => { e.stopPropagation(); setShowPrintModal(order); }} className="p-3 bg-white border rounded-xl flex items-center justify-center text-slate-500 hover:text-indigo-600 transition-all" title="طباعة"><Printer size={18} className="pointer-events-none" /></button>
+                             <button onClick={(e) => { e.stopPropagation(); setShowPrintModal(order); setInvoiceSentNoticeOrderId(null); }} className="p-3 bg-white border rounded-xl flex items-center justify-center text-slate-500 hover:text-indigo-600 transition-all" title="طباعة"><Printer size={18} className="pointer-events-none" /></button>
                              <button 
                                disabled={sendingMessageIds.has(order.id)}
                                onClick={(e) => { e.stopPropagation(); sendWhatsAppReminder(order, 'READY'); }} 
@@ -9436,7 +9476,7 @@ const App: React.FC = () => {
                                 <td className="py-3.5 px-4 text-left pl-6">
                                   <div className="flex items-center justify-end gap-1.5">
                                     <button
-                                      onClick={() => setShowPrintModal(order)}
+                                      onClick={() => { setShowPrintModal(order); setInvoiceSentNoticeOrderId(null); }}
                                       title="طباعة الفاتورة"
                                       className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs transition-all flex items-center justify-center shrink-0 shadow-xs cursor-pointer"
                                     >
@@ -9776,7 +9816,7 @@ const App: React.FC = () => {
                                     </td>
                                     <td className="py-3 px-4 text-left pl-6">
                                       <button
-                                        onClick={() => setShowPrintModal(order)}
+                                        onClick={() => { setShowPrintModal(order); setInvoiceSentNoticeOrderId(null); }}
                                         title="طباعة الفاتورة"
                                         className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs transition-all cursor-pointer"
                                       >
@@ -10517,6 +10557,7 @@ const App: React.FC = () => {
                     onClick={() => {
                       if (orders.length > 0) {
                         setShowPrintModal(orders[0]);
+                        setInvoiceSentNoticeOrderId(null);
                         setTimeout(() => window.print(), 350);
                       } else {
                         window.print();
@@ -13667,7 +13708,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center z-[200] p-3 sm:p-4 print-modal-overlay">
           <div className="bg-white rounded-3xl w-full max-w-[385px] shadow-2xl relative border border-slate-100 max-h-[90vh] flex flex-col overflow-hidden print-modal-card">
             <button 
-              onClick={() => setShowPrintModal(null)} 
+              onClick={() => { setShowPrintModal(null); setInvoiceSentNoticeOrderId(null); }} 
               className="absolute top-4 left-4 p-2 bg-slate-100/90 hover:bg-slate-200 rounded-full text-slate-500 no-print transition-all z-20 cursor-pointer shadow-sm"
               title="إغلاق"
             >
@@ -13808,6 +13849,16 @@ const App: React.FC = () => {
 
               {/* أزرار الإجراءات داخل النافذة المنبثقة */}
               <div className="space-y-2 mt-4 no-print">
+                {invoiceSentNoticeOrderId === showPrintModal.id && (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200/80 rounded-2xl flex items-center justify-between text-[11px] font-bold text-emerald-800 animate-fadeIn">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      <span>تم إرسال الفاتورة وملف الـ PDF للعميل فوراً عبر الواتساب</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-600 bg-emerald-100/80 px-2 py-0.5 rounded-full shrink-0">مرسلة ✅</span>
+                  </div>
+                )}
+
                 <button 
                   onClick={() => window.print()} 
                   className="w-full bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white py-3 px-4 rounded-2xl font-black text-sm shadow-md shadow-indigo-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
@@ -13818,10 +13869,11 @@ const App: React.FC = () => {
                 <button 
                   onClick={() => sendWhatsAppReminder(showPrintModal, 'RECEIVED')} 
                   disabled={sendingMessageIds.has(showPrintModal.id)}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white py-2.5 px-4 rounded-2xl font-black text-xs shadow-sm shadow-emerald-600/15 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="w-full bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 active:scale-[0.98] text-slate-700 py-2.5 px-4 rounded-2xl font-bold text-xs border border-slate-200 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  title="إعادة إرسال الفاتورة في حال رغبت بإرسالها مرة ثانية للعميل"
                 >
-                  {sendingMessageIds.has(showPrintModal.id) ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16}/>}
-                  إرسال الفاتورة والـ PDF عبر الواتساب
+                  {sendingMessageIds.has(showPrintModal.id) ? <Loader2 size={16} className="animate-spin text-emerald-600" /> : <RotateCcw size={15}/>}
+                  إعادة إرسال الفاتورة والـ PDF للعميل (واتساب)
                 </button>
 
                 <div className="grid grid-cols-2 gap-2 pt-0.5">
@@ -13834,7 +13886,7 @@ const App: React.FC = () => {
                     {isDownloadingPdf ? 'جاري تجهيز PDF...' : 'تحميل PDF الفاتورة'}
                   </button>
                   <button 
-                    onClick={() => setShowPrintModal(null)} 
+                    onClick={() => { setShowPrintModal(null); setInvoiceSentNoticeOrderId(null); }} 
                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     <X size={14} /> إغلاق النافذة

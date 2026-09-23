@@ -7,28 +7,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Print styling */
+/* Print styling helper */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #print-area, #print-area * {
-    visibility: visible;
-    background-color: white !important;
-    color: black !important;
-  }
-  #print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 10mm;
-    background: white !important;
-    box-shadow: none !important;
-    border: none !important;
-  }
   .no-print {
     display: none !important;
   }
 }
+
