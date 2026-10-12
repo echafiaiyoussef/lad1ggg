@@ -1322,8 +1322,8 @@ const App: React.FC = () => {
   }>({ name: '', total_items: '', price: '', duration_days: 30, discount_percent: '', isUnlimitedDays: false });
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
   
-  const [platformWhatsApp, setPlatformWhatsApp] = useState<string>('966500000000');
-  const [platformWhatsAppInput, setPlatformWhatsAppInput] = useState<string>('966500000000');
+  const [platformWhatsApp, setPlatformWhatsApp] = useState<string>('966573772343');
+  const [platformWhatsAppInput, setPlatformWhatsAppInput] = useState<string>('966573772343');
   
   const scanIntervalRef = useRef<number | null>(null);
   const isSubmittingOrderRef = useRef<boolean>(false);
@@ -1337,7 +1337,7 @@ const App: React.FC = () => {
         .eq('key', 'platform_support_whatsapp')
         .maybeSingle();
       if (data && data.value) {
-        const valStr = typeof data.value === 'string' ? data.value : (data.value.phone || '966500000000');
+        const valStr = typeof data.value === 'string' ? data.value : (data.value.phone || '966573772343');
         setPlatformWhatsApp(valStr);
         setPlatformWhatsAppInput(valStr);
       }
@@ -7414,7 +7414,7 @@ const App: React.FC = () => {
 
   if (userProfile?.is_disabled || userProfile?.status === 'disabled') {
     const cleanWaNum = platformWhatsApp.replace(/[^\d]/g, '');
-    const waLink = `https://wa.me/${cleanWaNum || '966500000000'}?text=${encodeURIComponent('السلام عليكم، تم تجميد حسابي أرجو الدعم لتفعيله.')}`;
+    const waLink = `https://wa.me/${cleanWaNum || '966573772343'}?text=${encodeURIComponent('السلام عليكم، تم تجميد حسابي أرجو الدعم لتفعيله.')}`;
 
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100 p-6 text-right" dir="rtl">
@@ -10141,7 +10141,7 @@ const App: React.FC = () => {
                       <div className="flex items-center gap-2 w-full sm:w-auto">
                         <input
                           type="text"
-                          placeholder="مثال: 966500000000"
+                          placeholder="مثال: 966573772343"
                           className="px-4 py-3 bg-slate-50 border border-slate-200 focus:border-emerald-500 rounded-2xl outline-none font-bold text-xs text-left w-full sm:w-60"
                           dir="ltr"
                           value={platformWhatsAppInput}
@@ -14411,7 +14411,7 @@ const App: React.FC = () => {
 
               <div className="grid grid-cols-1 gap-3 pt-4">
                 <a
-                  href="https://wa.me/966500000000"
+                  href={`https://wa.me/${platformWhatsApp || '966573772343'}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-black text-sm shadow-md transition-all flex items-center justify-center gap-2"

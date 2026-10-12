@@ -365,7 +365,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <span>ابدأ تجربتك المجانية ⚡</span>
               </button>
               <a
-                href="https://wa.me/966500000000"
+                href="https://wa.me/966573772343"
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => setMobileMenuOpen(false)}
@@ -1654,7 +1654,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </button>
 
             <a
-              href="https://wa.me/966500000000"
+              href="https://wa.me/966573772343"
               target="_blank"
               rel="noopener noreferrer"
               className="px-8 py-4 bg-[#0e1a38] hover:bg-[#142650] text-cyan-300 border border-slate-700 font-black text-sm rounded-2xl transition-all flex items-center gap-2 active:scale-95"
