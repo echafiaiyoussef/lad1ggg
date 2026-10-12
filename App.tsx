@@ -5700,6 +5700,58 @@ const App: React.FC = () => {
     }
   };
 
+  const updateOrderPayment = async (
+    id: string,
+    is_paid: boolean,
+    payment_method: Order['payment_method']
+  ) => {
+    const nowISO = new Date().toISOString();
+    const laundryId = userProfile?.laundry_id;
+
+    setOrders(prev => {
+      const nextOrders = prev.map(o => {
+        if (o.id === id) {
+          return {
+            ...o,
+            is_paid,
+            payment_method,
+            updated_at: nowISO
+          };
+        }
+        return o;
+      });
+      try {
+        if (laundryId) localStorage.setItem(`laundry_orders_${laundryId}`, JSON.stringify(nextOrders));
+        localStorage.setItem('laundry_orders', JSON.stringify(nextOrders));
+      } catch (e) {}
+      return nextOrders;
+    });
+
+    if (isBrowserOnline()) {
+      try {
+        const { error } = await supabase.from('orders').update({
+          is_paid,
+          payment_method,
+          updated_at: nowISO
+        }).eq('id', id);
+        if (error) throw error;
+      } catch (e) {
+        console.warn("Online order payment update failed, queuing offline:", e);
+        addOfflineAction({
+          type: 'UPDATE_ORDER_PAYMENT',
+          payload: { orderId: id, is_paid, payment_method, updated_at: nowISO },
+          laundryId
+        });
+      }
+    } else {
+      addOfflineAction({
+        type: 'UPDATE_ORDER_PAYMENT',
+        payload: { orderId: id, is_paid, payment_method, updated_at: nowISO },
+        laundryId
+      });
+    }
+  };
+
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
 
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
@@ -14517,6 +14569,7 @@ const App: React.FC = () => {
         onClose={() => setShowQRScannerModal(false)}
         orders={orders}
         onOrderUpdated={(orderId, status, options) => updateOrderStatus(orderId, status, options)}
+        onOrderPaymentUpdated={updateOrderPayment}
         laundryName={userProfile?.laundry_name || 'مغسلة عود ونظافة'}
         isWhatsAppConnected={whatsAppBotStatus.isConnected}
         onSendWhatsAppNotification={sendOrderReadyNotification}

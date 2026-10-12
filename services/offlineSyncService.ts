@@ -22,6 +22,7 @@ export const OFFLINE_SAVED_AT_KEY = 'laundry_offline_saved_at';
 export type OfflineActionType = 
   | 'CREATE_ORDER' 
   | 'UPDATE_ORDER_STATUS' 
+  | 'UPDATE_ORDER_PAYMENT'
   | 'UPDATE_ORDER' 
   | 'DELETE_ORDER'
   | 'CREATE_INVENTORY'
@@ -590,6 +591,15 @@ export async function syncOfflineQueue(
         const { orderId, status, updated_at } = action.payload;
         const { error } = await supabase.from('orders').update({
           status,
+          updated_at: updated_at || new Date().toISOString()
+        }).eq('id', orderId);
+        if (error) throw error;
+        syncedCount++;
+      } else if (action.type === 'UPDATE_ORDER_PAYMENT') {
+        const { orderId, is_paid, payment_method, updated_at } = action.payload;
+        const { error } = await supabase.from('orders').update({
+          is_paid,
+          payment_method,
           updated_at: updated_at || new Date().toISOString()
         }).eq('id', orderId);
         if (error) throw error;

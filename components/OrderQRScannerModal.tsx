@@ -35,7 +35,8 @@ import {
   Terminal,
   FileText,
   AlertTriangle,
-  Info
+  Info,
+  CreditCard
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { supabase } from '../supabase';
@@ -103,6 +104,7 @@ interface OrderQRScannerModalProps {
   onClose: () => void;
   orders: Order[];
   onOrderUpdated: (orderId: string, newStatus: OrderStatus, options?: { skipNotification?: boolean }) => Promise<void> | void;
+  onOrderPaymentUpdated?: (orderId: string, isPaid: boolean, paymentMethod: Order['payment_method']) => Promise<void> | void;
   laundryName: string;
   onSendWhatsAppNotification?: (order: Order) => Promise<{ success: boolean; error?: string }>;
   isWhatsAppConnected?: boolean;
@@ -113,6 +115,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
   onClose,
   orders,
   onOrderUpdated,
+  onOrderPaymentUpdated,
   laundryName,
   onSendWhatsAppNotification,
   isWhatsAppConnected = false
@@ -173,6 +176,8 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
 
   // Result state
   const [processedOrder, setProcessedOrder] = useState<Order | null>(null);
+  const [isUpdatingPayment, setIsUpdatingPayment] = useState<boolean>(false);
+  const [paymentUpdateSuccess, setPaymentUpdateSuccess] = useState<string | null>(null);
   const [notificationStatus, setNotificationStatus] = useState<{
     sent: boolean;
     channel: 'silent_bot' | 'whatsapp_link' | 'none' | 'auto_whatsapp' | 'failed';
@@ -974,7 +979,68 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     setScanSuccessPulse(false);
     setIsScanning(true);
     setIsProcessing(false);
+    setIsUpdatingPayment(false);
+    setPaymentUpdateSuccess(null);
     startCamera();
+  };
+
+  // Quick payment status & method updater with instant database/state sync
+  const handlePaymentChange = async (newIsPaid: boolean, newPaymentMethod?: Order['payment_method']) => {
+    if (!processedOrder || isUpdatingPayment) return;
+    const targetPaymentMethod = newPaymentMethod || processedOrder.payment_method || 'Cash';
+
+    const updated: Order = {
+      ...processedOrder,
+      is_paid: newIsPaid,
+      payment_method: targetPaymentMethod
+    };
+
+    setProcessedOrder(updated);
+    setIsUpdatingPayment(true);
+
+    // Reconstruct smart message & WhatsApp link with accurate payment status
+    const methodArabic = targetPaymentMethod === 'Cash' ? 'نقدي (كاش)' : targetPaymentMethod === 'Card' ? 'شبكة (مدى/بطاقة)' : targetPaymentMethod === 'Transfer' ? 'تحويل بنكي' : targetPaymentMethod;
+    const smartMessage = `مرحباً ${updated.customer_name}، يسعدنا إبلاغك بأن طلبك رقم #${updated.order_number} في ${laundryName || 'مغسلة عود ونظافة'} قد تم الانتهاء منه بالكامل وهو جاهز للاستلام الآن! 🧺✨\n\n📦 رقم الفاتورة: #${updated.order_number}\n💰 المبلغ الإجمالي: ${updated.total.toFixed(2)} ر.س\n📍 حالة السداد: ${updated.is_paid ? `مسددة بالكامل (${methodArabic}) ✅` : 'المبلغ مستحق عند الاستلام ⏳'}\n\nنرجو التفضل بزيارتنا لاستلامه. نسعد دائماً بخدمتكم! 🌟`;
+
+    const cleanPhone = (updated.customer_phone || '').replace(/\D/g, '');
+    let finalPhone = cleanPhone;
+    if (finalPhone.startsWith('00')) finalPhone = finalPhone.slice(2);
+    if (finalPhone.startsWith('05') && finalPhone.length === 10) {
+      finalPhone = '966' + finalPhone.slice(1);
+    } else if (finalPhone.startsWith('5') && finalPhone.length === 9) {
+      finalPhone = '966' + finalPhone;
+    } else if ((finalPhone.startsWith('06') || finalPhone.startsWith('07')) && finalPhone.length === 10) {
+      finalPhone = '212' + finalPhone.slice(1);
+    } else if (finalPhone.startsWith('0')) {
+      finalPhone = '966' + finalPhone.slice(1);
+    }
+    finalPhone = finalPhone.replace(/^0+/, '');
+    const waUrl = `https://wa.me/${finalPhone}?text=${encodeURIComponent(smartMessage)}`;
+
+    setNotificationStatus(prev => prev ? ({ ...prev, waUrl }) : {
+      sent: false,
+      channel: 'whatsapp_link',
+      message: 'تم تحديث بيانات الفاتورة بنجاح، يمكنك إرسال الواتساب الآن 💬',
+      waUrl
+    });
+
+    try {
+      if (onOrderPaymentUpdated) {
+        await onOrderPaymentUpdated(updated.id, newIsPaid, targetPaymentMethod);
+      } else {
+        await supabase.from('orders').update({
+          is_paid: newIsPaid,
+          payment_method: targetPaymentMethod,
+          updated_at: new Date().toISOString()
+        }).eq('id', updated.id);
+      }
+      setPaymentUpdateSuccess(newIsPaid ? 'تم تسجيل السداد وتحديث الطلب بنجاح! ⚡' : 'تم تعيين الحالة إلى غير مسدد ⚡');
+      setTimeout(() => setPaymentUpdateSuccess(null), 3000);
+    } catch (err: any) {
+      console.warn("Error updating payment in QR scanner modal:", err);
+    } finally {
+      setIsUpdatingPayment(false);
+    }
   };
 
   // Close on Escape key press
@@ -1071,8 +1137,115 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
                 <div className="flex justify-between items-center font-bold">
                   <span className="text-slate-400 text-[11px]">حالة السداد:</span>
                   <span className={`font-black ${processedOrder.is_paid ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    {processedOrder.is_paid ? 'مدفوعة بالكامل ✅' : 'معلقة / غير مسددة ⏳'}
+                    {processedOrder.is_paid 
+                      ? `مدفوعة (${processedOrder.payment_method === 'Cash' ? 'نقدي' : processedOrder.payment_method === 'Card' ? 'شبكة' : processedOrder.payment_method === 'Transfer' ? 'تحويل' : processedOrder.payment_method || 'نقدي'}) ✅` 
+                      : 'معلقة / غير مسددة ⏳'}
                   </span>
+                </div>
+              </div>
+
+              {/* Payment Edit & Quick Selection Section */}
+              <div className="p-3.5 bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 text-white rounded-2xl border border-indigo-800/60 shadow-lg text-right space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                      <CreditCard size={13} />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black text-white block leading-tight">تعديل وسيلة الدفع والسداد</span>
+                      <span className="text-[10px] text-indigo-200/80 font-bold block">تحديث فوري للطلب بنقرة واحدة ⚡</span>
+                    </div>
+                  </div>
+                  {isUpdatingPayment ? (
+                    <span className="text-[10px] font-black text-amber-300 bg-amber-500/20 border border-amber-400/30 px-2 py-0.5 rounded-full animate-pulse flex items-center gap-1">
+                      <RefreshCw size={10} className="animate-spin" /> جاري التحديث...
+                    </span>
+                  ) : paymentUpdateSuccess ? (
+                    <span className="text-[10px] font-black text-emerald-300 bg-emerald-500/20 border border-emerald-400/30 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in">
+                      <Check size={10} /> تم الحفظ ✅
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* 1-Tap Toggle Status & Payment Method Select (User's Exact Select Component) */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handlePaymentChange(!processedOrder.is_paid, processedOrder.payment_method)}
+                    disabled={isUpdatingPayment}
+                    className={`py-2.5 px-3 rounded-xl border font-black text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 touch-manipulation shadow-sm ${
+                      processedOrder.is_paid
+                        ? 'bg-emerald-500 hover:bg-emerald-600 border-emerald-400 text-white shadow-emerald-950/40'
+                        : 'bg-white/10 hover:bg-white/15 border-white/20 text-slate-200'
+                    }`}
+                    title="انقر لتبديل حالة السداد وتحديث الطلب فوراً"
+                  >
+                    <CheckCircle2 size={14} className={processedOrder.is_paid ? 'text-white' : 'text-slate-400'} />
+                    <span>{processedOrder.is_paid ? 'تم السداد ✅' : 'لم يسدد ⏳'}</span>
+                  </button>
+
+                  <select
+                    className="bg-white/15 border border-white/20 rounded-xl py-2.5 px-3 text-xs font-black text-white outline-none text-right cursor-pointer focus:bg-white/25 transition-all"
+                    value={processedOrder.payment_method || 'Cash'}
+                    onChange={(e) => {
+                      const newMethod = e.target.value as 'Cash' | 'Card' | 'Transfer';
+                      handlePaymentChange(true, newMethod);
+                    }}
+                    disabled={isUpdatingPayment}
+                    title="تعديل طريقة الدفع (يتم التحديث فوراً)"
+                  >
+                    <option value="Cash" className="text-slate-900">نقدي (كاش)</option>
+                    <option value="Card" className="text-slate-900">شبكة (مدى/بطاقة)</option>
+                    <option value="Transfer" className="text-slate-900">تحويل بنكي</option>
+                  </select>
+                </div>
+
+                {/* 3 Quick-Tab Pill Buttons: Just tab and update order instantly */}
+                <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => handlePaymentChange(true, 'Cash')}
+                    disabled={isUpdatingPayment}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 touch-manipulation ${
+                      processedOrder.is_paid && processedOrder.payment_method === 'Cash'
+                        ? 'bg-emerald-500 text-white shadow-sm ring-2 ring-emerald-300/40'
+                        : 'bg-white/10 hover:bg-white/20 text-slate-200 border border-white/10'
+                    }`}
+                    title="تسديد نقدي فوري"
+                  >
+                    <span>💵 نقدي</span>
+                    {processedOrder.is_paid && processedOrder.payment_method === 'Cash' && <Check size={11} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handlePaymentChange(true, 'Card')}
+                    disabled={isUpdatingPayment}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 touch-manipulation ${
+                      processedOrder.is_paid && processedOrder.payment_method === 'Card'
+                        ? 'bg-emerald-500 text-white shadow-sm ring-2 ring-emerald-300/40'
+                        : 'bg-white/10 hover:bg-white/20 text-slate-200 border border-white/10'
+                    }`}
+                    title="تسديد شبكة فوري"
+                  >
+                    <span>💳 شبكة</span>
+                    {processedOrder.is_paid && processedOrder.payment_method === 'Card' && <Check size={11} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handlePaymentChange(true, 'Transfer')}
+                    disabled={isUpdatingPayment}
+                    className={`py-2 px-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 touch-manipulation ${
+                      processedOrder.is_paid && processedOrder.payment_method === 'Transfer'
+                        ? 'bg-emerald-500 text-white shadow-sm ring-2 ring-emerald-300/40'
+                        : 'bg-white/10 hover:bg-white/20 text-slate-200 border border-white/10'
+                    }`}
+                    title="تسديد تحويل بنكي فوري"
+                  >
+                    <span>🏦 تحويل</span>
+                    {processedOrder.is_paid && processedOrder.payment_method === 'Transfer' && <Check size={11} />}
+                  </button>
                 </div>
               </div>
 
