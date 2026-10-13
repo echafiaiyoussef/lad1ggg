@@ -681,8 +681,8 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
       setScanSuccessPulse(false);
       setProcessedOrder(updatedOrder);
 
-      // Construct ready notification message
-      const smartMessage = `مرحباً ${order.customer_name}، يسعدنا إبلاغك بأن طلبك رقم #${order.order_number} في ${laundryName || 'مغسلة عود ونظافة'} قد تم الانتهاء منه بالكامل وهو جاهز للاستلام الآن! 🧺✨\n\n📦 رقم الفاتورة: #${order.order_number}\n💰 المبلغ الإجمالي: ${order.total.toFixed(2)} ر.س\n📍 حالة السداد: ${order.is_paid ? 'مسددة بالكامل ✅' : 'المبلغ مستحق عند الاستلام ⏳'}\n\nنرجو التفضل بزيارتنا لاستلامه. نسعد دائماً بخدمتكم! 🌟`;
+      // Construct ready notification message (simple direct notification, no redundant PDF)
+      const smartMessage = `مرحباً ${order.customer_name}، نود إعلامكم بأن طلبكم #${order.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`;
 
       const cleanPhone = (order.customer_phone || '').replace(/\D/g, '');
       let finalPhone = cleanPhone;
@@ -722,7 +722,7 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
               setNotificationStatus({
                 sent: true,
                 channel: 'silent_bot',
-                message: 'تم إرسال إشعار الجاهزية للعميل تلقائياً في الخلفية مع الفاتورة الرسمية! 📲',
+                message: 'تم إرسال إشعار الجاهزية للعميل تلقائياً بنجاح! 📲',
                 waUrl
               });
             } else {
@@ -998,9 +998,8 @@ export const OrderQRScannerModal: React.FC<OrderQRScannerModalProps> = ({
     setProcessedOrder(updated);
     setIsUpdatingPayment(true);
 
-    // Reconstruct smart message & WhatsApp link with accurate payment status
-    const methodArabic = targetPaymentMethod === 'Cash' ? 'نقدي (كاش)' : targetPaymentMethod === 'Card' ? 'شبكة (مدى/بطاقة)' : targetPaymentMethod === 'Transfer' ? 'تحويل بنكي' : targetPaymentMethod;
-    const smartMessage = `مرحباً ${updated.customer_name}، يسعدنا إبلاغك بأن طلبك رقم #${updated.order_number} في ${laundryName || 'مغسلة عود ونظافة'} قد تم الانتهاء منه بالكامل وهو جاهز للاستلام الآن! 🧺✨\n\n📦 رقم الفاتورة: #${updated.order_number}\n💰 المبلغ الإجمالي: ${updated.total.toFixed(2)} ر.س\n📍 حالة السداد: ${updated.is_paid ? `مسددة بالكامل (${methodArabic}) ✅` : 'المبلغ مستحق عند الاستلام ⏳'}\n\nنرجو التفضل بزيارتنا لاستلامه. نسعد دائماً بخدمتكم! 🌟`;
+    // Reconstruct smart message & WhatsApp link (simple direct notification, no redundant PDF)
+    const smartMessage = `مرحباً ${updated.customer_name}، نود إعلامكم بأن طلبكم #${updated.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`;
 
     const cleanPhone = (updated.customer_phone || '').replace(/\D/g, '');
     let finalPhone = cleanPhone;

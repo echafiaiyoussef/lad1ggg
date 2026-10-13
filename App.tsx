@@ -6253,15 +6253,21 @@ const App: React.FC = () => {
     recentSentNotificationsRef.current.set(dedupKey3, now);
 
     try {
+      const isInitialReceived = context === 'RECEIVED';
       const smartMsg = await generateSmartReminder(order, context);
-      const fullMessage = `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`;
+      const fullMessage = isInitialReceived
+        ? `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`
+        : (smartMsg || `مرحباً ${order.customer_name}، نود إعلامكم بأن طلبكم #${order.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`);
 
       const laundryName = userProfile?.laundry_name || 'مغسلة عود ونظافة';
       let pdfBase64: string | undefined = undefined;
-      try {
-        pdfBase64 = await generateInvoicePdfBase64(order, laundryName);
-      } catch (pdfErr) {
-        console.warn("Silent bot PDF generation error:", pdfErr);
+      // Only attach invoice PDF on the first initial receipt of the order
+      if (isInitialReceived) {
+        try {
+          pdfBase64 = await generateInvoicePdfBase64(order, laundryName);
+        } catch (pdfErr) {
+          console.warn("Silent bot PDF generation error:", pdfErr);
+        }
       }
 
       const accountId = userProfile?.laundry_id || userProfile?.id || session?.user?.id || 'default';
@@ -6270,7 +6276,7 @@ const App: React.FC = () => {
         toPhone: order.customer_phone,
         message: fullMessage,
         pdfBase64,
-        pdfFileName: `فاتورة-${order.order_number}.pdf`
+        pdfFileName: pdfBase64 ? `فاتورة-${order.order_number}.pdf` : undefined
       });
 
       if (!res.success) {
@@ -6312,9 +6318,11 @@ const App: React.FC = () => {
     
     try {
       const laundryName = userProfile?.laundry_name || 'مغسلة عود ونظافة';
-      // Generate smart reminder message
+      const isInitialReceived = context === 'RECEIVED';
       const smartMsg = await generateSmartReminder(order, context);
-      const fullMessage = `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`;
+      const fullMessage = isInitialReceived
+        ? `${smartMsg}\n\n📦 فاتورة: #${order.order_number}\n💰 الإجمالي: ${order.total.toFixed(2)} ريال\n📍 الحالة: ${statusArabic[order.status] || order.status}`
+        : (smartMsg || `مرحباً ${order.customer_name}، نود إعلامكم بأن طلبكم #${order.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`);
       
       const cleanPhone = order.customer_phone.replace(/\D/g, '');
       const finalPhone = cleanPhone.startsWith('966') ? cleanPhone : `966${cleanPhone.replace(/^0/, '')}`;
@@ -6323,18 +6331,21 @@ const App: React.FC = () => {
       let pdfBlob: Blob | null = null;
       let pdfBase64: string | undefined = undefined;
 
-      try {
-        pdfBlob = await generateInvoicePdfBlob(order, laundryName);
-        pdfBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(pdfBlob!);
-        });
-      } catch (pdfErr) {
-        console.warn("PDF generation warning in reminder:", pdfErr);
+      // Only generate invoice PDF for the first time when order is received
+      if (isInitialReceived) {
+        try {
+          pdfBlob = await generateInvoicePdfBlob(order, laundryName);
+          pdfBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(pdfBlob!);
+          });
+        } catch (pdfErr) {
+          console.warn("PDF generation warning in reminder:", pdfErr);
+        }
       }
 
-      // 1. IF WhatsApp Bot is connected, send message AND PDF directly in background!
+      // 1. IF WhatsApp Bot is connected, send message (with PDF only on first receipt) directly in background!
       if (whatsAppBotStatus.isConnected) {
         const accountId = userProfile?.laundry_id || userProfile?.id || session?.user?.id || 'default';
         const botRes = await sendWhatsAppBotMessage({
@@ -6342,21 +6353,23 @@ const App: React.FC = () => {
           toPhone: order.customer_phone,
           message: fullMessage,
           pdfBase64,
-          pdfFileName: `فاتورة-${order.order_number}.pdf`
+          pdfFileName: pdfBase64 ? `فاتورة-${order.order_number}.pdf` : undefined
         });
 
         if (botRes.success) {
           setInvoiceSentNoticeOrderId(order.id);
           setToastNotification({
             type: 'success',
-            message: `تم إرسال الفاتورة والرسالة للعميل (${order.customer_name}) مباشرة مع ملف PDF عبر الواتساب! 🟢`
+            message: isInitialReceived
+              ? `تم إرسال الفاتورة والرسالة للعميل (${order.customer_name}) مباشرة مع ملف PDF عبر الواتساب! 🟢`
+              : `تم إرسال رسالة الجاهزية للعميل (${order.customer_name}) بنجاح عبر الواتساب! 🟢`
           });
           return;
         }
       }
 
-      // 2. If WhatsApp Bot is not connected, use native sharing or auto-download PDF and open chat
-      if (pdfBlob) {
+      // 2. If WhatsApp Bot is not connected, use native sharing or auto-download PDF (only on first receipt) and open chat
+      if (isInitialReceived && pdfBlob) {
         const pdfFile = new File([pdfBlob], `فاتورة-${order.order_number}.pdf`, { type: 'application/pdf' });
 
         if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
@@ -6449,17 +6462,11 @@ const App: React.FC = () => {
       try {
         smartMsg = await generateSmartReminder(scannedOrder, 'READY');
       } catch {
-        smartMsg = `مرحباً بك عميلنا العزيز ${scannedOrder.customer_name} ✨\nيسعدنا إبلاغك بأن طلبك أصبح جاهزاً للاستلام الآن! تم الانتهاء من تجهيز وتغليف ملابسك بعناية، تفضل بزيارتنا للاستلام. نسعد دائماً بخدمتك في ${laundryName}. 🌸`;
+        smartMsg = `مرحباً ${scannedOrder.customer_name}، نود إعلامكم بأن طلبكم #${scannedOrder.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`;
       }
 
-      const fullMessage = `${smartMsg}\n\n📦 رقم الفاتورة: #${scannedOrder.order_number}\n💰 الإجمالي: ${scannedOrder.total.toFixed(2)} ر.س\n📍 الحالة: جاهز للاستلام ✨`;
-
-      let pdfBase64: string | undefined = undefined;
-      try {
-        pdfBase64 = await generateInvoicePdfBase64(scannedOrder, laundryName);
-      } catch (pdfErr) {
-        console.warn("Ready notification PDF generation error:", pdfErr);
-      }
+      // Simple ready notification message without extra attachments
+      const fullMessage = smartMsg || `مرحباً ${scannedOrder.customer_name}، نود إعلامكم بأن طلبكم #${scannedOrder.order_number} جاهز تماماً وبانتظاركم لاستلامه الآن.`;
 
       let sendSuccess = false;
       let sendError = '';
@@ -6468,9 +6475,7 @@ const App: React.FC = () => {
       const res = await sendWhatsAppBotMessage({
         accountId,
         toPhone: scannedOrder.customer_phone,
-        message: fullMessage,
-        pdfBase64,
-        pdfFileName: `فاتورة-${scannedOrder.order_number}.pdf`
+        message: fullMessage
       });
 
       if (res.success) {
@@ -6533,7 +6538,7 @@ const App: React.FC = () => {
       if (notifRes.success) {
         setToastNotification({
           type: 'success',
-          message: `⚡ تم مسح رمز الفاتورة بنجاح! طلب العميل ${order.customer_name} (#${order.order_number}) أصبح (جاهز للاستلام) وتم إرسال رسالة الواتساب مع الفاتورة فوراً 🧺✅`
+          message: `⚡ تم مسح رمز الفاتورة بنجاح! طلب العميل ${order.customer_name} (#${order.order_number}) أصبح (جاهز للاستلام) وتم إرسال رسالة الجاهزية فوراً 🧺✅`
         });
       } else {
         setToastNotification({

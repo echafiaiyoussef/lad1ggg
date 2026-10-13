@@ -161,7 +161,7 @@ async function startServer() {
       
       const fallbackMessages = {
         RECEIVED: `مرحباً ${order?.customer_name || ''} نود إعلامكم بأننا استلمنا طلبكم رقم ${order?.order_number || ''} ونحن نعمل عليه الآن لضمان تقديمه بأفضل جودة. إجمالي قيمة الطلب هي ${(order?.total || 0).toFixed(2)} ريال سعودي. شكراً لاختياركم لنا ويسعدنا دائماً خدمتكم.`,
-        READY: `مرحباً ${order?.customer_name || ''} نود إعلامكم بأن طلبكم رقم ${order?.order_number || ''} قد تم الانتهاء منه وهو جاهز تماماً وبانتظاركم لاستلامه الآن. إجمالي المبلغ هو ${(order?.total || 0).toFixed(2)} ريال سعودي. يسعدنا حضوركم.`,
+        READY: `مرحباً ${order?.customer_name || ''}، نود إعلامكم بأن طلبكم #${order?.order_number || ''} جاهز تماماً وبانتظاركم لاستلامه الآن.`,
         REMINDER: `مرحباً ${order?.customer_name || ''}، نود تذكيركم بأن طلبكم رقم ${order?.order_number || ''} جاهز للاستلام. نسعد بزيارتكم.`
       };
 
@@ -194,7 +194,7 @@ async function startServer() {
       const { order, context } = req.body;
       const fallbackMessages = {
         RECEIVED: `مرحباً ${order?.customer_name || ''} نود إعلامكم بأننا استلمنا طلبكم رقم ${order?.order_number || ''} ونحن نعمل عليه الآن لضمان تقديمه بأفضل جودة. إجمالي قيمة الطلب هي ${(order?.total || 0).toFixed(2)} ريال سعودي. شكراً لاختياركم لنا ويسعدنا دائماً خدمتكم.`,
-        READY: `مرحباً ${order?.customer_name || ''} نود إعلامكم بأن طلبكم رقم ${order?.order_number || ''} قد تم الانتهاء منه وهو جاهز تماماً وبانتظاركم لاستلامه الآن. إجمالي المبلغ هو ${(order?.total || 0).toFixed(2)} ريال سعودي. يسعدنا حضوركم.`,
+        READY: `مرحباً ${order?.customer_name || ''}، نود إعلامكم بأن طلبكم #${order?.order_number || ''} جاهز تماماً وبانتظاركم لاستلامه الآن.`,
         REMINDER: `مرحباً ${order?.customer_name || ''}، نود تذكيركم بأن طلبكم رقم ${order?.order_number || ''} جاهز للاستلام. نسعد بزيارتكم.`
       };
 
